@@ -141,6 +141,9 @@ public abstract class AAdapter {
 	private static final java.util.regex.Pattern SEGMENT = java.util.regex.Pattern.compile("[A-Za-z0-9._-]{1,64}");
 	/** The segment that would make a principal read as an agent's ({@link covia.grid.Principals#AGENT_SEP}). */
 	private static final String AGENT_SEGMENT = "g";
+	/** Why an adapter cannot be a principal: its name, which is not one segment in the shape a DID keeps. */
+	public static final String INVALID_ADAPTER_NAME = "Adapter %s cannot be a principal: its name must be letters, digits, "
+		+ "'.', '_' or '-', and not 'g'";
 	/** Why a sub-principal cannot be made: the path, then the adapter. */
 	public static final String INVALID_SUB_PRINCIPAL = "Sub-principal path '%s' of adapter %s must be one or more segments "
 		+ "of letters, digits, '.', '_' or '-', separated by '/', none of them 'g'";
@@ -152,9 +155,13 @@ public abstract class AAdapter {
 	 * {@code adapter x/<name>} (AUTHORITY.md, Provenance). It holds no
 	 * authority ({@link Engine#context(AString)}): it says who a message is
 	 * from, nothing more.
+	 *
+	 * @throws IllegalStateException with {@link #INVALID_ADAPTER_NAME} when the adapter's name is not one such segment
 	 */
 	public final AString principal() {
-		return Strings.create(engine.getDIDString() + PRINCIPAL_SEP + getName());
+		String name = getName();
+		if (!segmentsValid(new String[] {name})) throw new IllegalStateException(INVALID_ADAPTER_NAME.formatted(name));
+		return Strings.create(engine.getDIDString() + PRINCIPAL_SEP + name);
 	}
 
 	/**

@@ -1009,7 +1009,10 @@ An agent is a **sub-principal of its owner**, named
 `<ownerDID>:g:<agentId>` — the same `g` namespace its state lives in, so one
 vocabulary names it as a principal and as a lattice location. Suffixing a DID
 is the existing convention (`<venueDID>:public`), and it composes over any DID
-method.
+method. An adapter that is a message's source is named the same way,
+`<venueDID>:x:<name>` as `x/<name>` is its path, or `<venueDID>:x:<name>:<segment>…`
+for one of its sub-principals; neither holds any authority
+([ADAPTERS.md](ADAPTERS.md#writing-an-adapter)).
 
 Two questions must not be conflated, and the context answers them separately:
 

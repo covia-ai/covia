@@ -281,8 +281,10 @@ A block is its label followed by its body; in `xml` the body is followed by the 
 **What the agent sees.** The element is the turn's provenance text worded for
 the agent ([AUTHORITY.md](AUTHORITY.md#provenance-text)): where the request
 started and each handover that carried it, each principal named as the agent
-would refer to it, rendered from the stored turn and the agent's identity
-alone, so a turn reads the same every time:
+would refer to it, rendered from the stored turn, the agent's identity and
+the wording of the adapters that wrote its records, which depends on the
+record and the reader alone, so a turn reads the same every time; loading or
+unloading an adapter that words its records changes how they read, once:
 
 ```
 [From user did:key:…bob via auth (signed in, transport http); acting as your owner via user (admin/sudo)]

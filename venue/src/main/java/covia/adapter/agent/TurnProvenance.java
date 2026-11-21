@@ -25,8 +25,11 @@ import covia.venue.auth.AuthResult;
  * {@link Provenance} words it for the agent; a turn stored before keeps the
  * label wording it always had: its caller's relationship to the agent and one
  * segment per step, or its channel's authentication record read as that
- * channel's step. Rendered from the stored turn and the agent's identity
- * alone, so a turn renders the same way every time and the cached prefix holds.
+ * channel's step. Rendered from the stored turn, the agent's identity and the
+ * wording of the adapters that wrote its records, which depends on the record
+ * and the reader alone ({@link covia.adapter.AAdapter#routeText}), so a turn
+ * renders the same way every time and the cached prefix holds; loading or
+ * unloading an adapter that words its records changes how they read, once.
  *
  * <p>Nothing stored is trusted to be well formed. Only values in a conservative
  * shape are shown, and names never are. A route that cannot be read shows as

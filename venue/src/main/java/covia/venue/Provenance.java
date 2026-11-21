@@ -365,8 +365,8 @@ public final class Provenance {
 		/**
 		 * {@code principal} as this reader refers to it. A principal a door
 		 * authenticated ({@code signedIn}) is named by its DID alone when it is
-		 * shaped as an agent's, since a DID's shape says nothing of whose agent
-		 * it is; elsewhere the venue recorded the principal itself.
+		 * shaped as an agent's or an adapter's, since a DID's shape says nothing
+		 * of what signed in; elsewhere the venue recorded the principal itself.
 		 */
 		String who(AString principal, boolean signedIn) {
 			String did = shownDid(principal);
@@ -376,7 +376,7 @@ public final class Provenance {
 			if (principal.equals(account)) return YOUR_OWNER;
 			if (engine != null && engine.isVenuePrincipal(principal)) return VENUE;
 			String adapterPath = AAdapter.path(engine, principal);
-			if (adapterPath != null) return ADAPTER.formatted(adapterPath);
+			if (adapterPath != null) return signedIn ? did : ADAPTER.formatted(adapterPath);
 			AString agentId = Principals.agentIdOf(principal);
 			if (agentId == null) return "user " + did;
 			if (signedIn) return did;

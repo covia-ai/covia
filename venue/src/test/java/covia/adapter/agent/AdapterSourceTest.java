@@ -112,6 +112,22 @@ public class AdapterSourceTest {
 		assertNull(AAdapter.path(engine, Strings.create("did:key:z6MkSomeoneElse:x:rooms")), "only the venue's DID has adapter principals");
 		assertNull(AAdapter.path(engine, ALICE));
 		assertNull(AAdapter.path(engine, Strings.create(venue + ":x:rooms:g:helper")), "an agent's shape is not an adapter's");
+		Rooms oddlyNamed = new Rooms() {
+			@Override public String getName() { return "odd name"; }
+		};
+		oddlyNamed.engine = engine;
+		IllegalStateException refused = assertThrows(IllegalStateException.class, oddlyNamed::principal);
+		assertEquals(AAdapter.INVALID_ADAPTER_NAME.formatted("odd name"), refused.getMessage(),
+			"a name its principal could not be read back from is refused");
+	}
+
+	@Test
+	public void aDoorNamesAnAdapterShapedDidByTheDidAlone() {
+		AString shaped = rooms.principal("design-review");
+		AMap<AString, ACell> signedIn = Maps.of(Fields.CALLER, shaped, Fields.ROUTE, Vectors.of(RequestContext.routeRecord(
+			Strings.create("auth"), shaped, Maps.of(Fields.TRANSPORT, "http"), RouteText.of("signed in"))));
+		assertEquals("[From " + shaped + " via auth (signed in)]", bracket(signedIn),
+			"a DID's shape says nothing of what signed in");
 	}
 
 	@Test
