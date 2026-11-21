@@ -107,6 +107,11 @@ component and DLFS regressions (`mvnw.cmd` on Windows):
 ./mvnw test -pl convex-core,convex-dlfs -am '-Dtest=*CursorTest,*ComponentTest,*ApplicationTest,*HostTest,DLFS*Test' '-Dsurefire.failIfNoSpecifiedTests=false'
 ```
 
+`javalin.version` in the root `pom.xml` must match the one that Convex release was
+built with (`convex-restapi/pom.xml` at the same tag). Covia's MCP endpoint extends
+Convex's `McpServer` and the venue mounts Convex's DLFS WebDAV routes, so a mismatch
+compiles but fails at runtime. A Javalin major upgrade therefore lands in Convex first.
+
 ## Store Compatibility
 
 ### Upgrading from Convex 0.8.17
