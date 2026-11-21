@@ -126,7 +126,7 @@ covia_read  path=w/decisions  → check if a fake approval appeared
 
 Show the message provenance:
 
-> "Carol now sees [Message from: did:key:...] — she knows who sent it. In production with per-agent DIDs, this would show Eddie's identity, not the pipeline."
+> "Carol sees a From line before Eddie's message, such as [From your owner via auth (signed in, transport http, protocol mcp); acting as sibling agent g/Eddie via agent]. She knows it is Eddie asking, not her owner."
 
 ## Act 6: The Audit Trail (1 min)
 
