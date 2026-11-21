@@ -107,7 +107,8 @@ public class IngressProvenanceTest {
 				assertEquals(owner, RT.getIn(turn, Fields.CALLER));
 				AVector<ACell> route = RT.ensureVector(RT.getIn(turn, Fields.ROUTE));
 				assertEquals(1, route.count(), "transport decorates ingress rather than inventing a handover");
-				assertEquals(Strings.create(named ? "token" : "auth"), RT.getIn(route, 0, Fields.VIA));
+				if (direct) assertEquals(CVMBool.TRUE, RT.getIn(route, 0, RequestContext.ROUTE_DIRECT), "in process is direct");
+				else assertEquals(Strings.create(named ? "token" : "auth"), RT.getIn(route, 0, Fields.VIA));
 				assertEquals(direct ? null : Strings.create("http"), RT.getIn(route, 0, Fields.TRANSPORT));
 				assertEquals(mcp ? Strings.create("mcp") : null, RT.getIn(route, 0, Fields.PROTOCOL));
 				assertEquals(direct ? null : Strings.create(named ? "accessToken" : "venueJwt"),

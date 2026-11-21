@@ -18,9 +18,10 @@ import convex.core.data.prim.CVMLong;
  * <p>Fixed wording is the adapter's own ({@link Builder#text}). A value that
  * came from outside reaches the text only through a part whose shape is
  * checked each time the line is shown: a name, an identifier, a handle, a
- * time, or a principal, which the venue shows as the agent's owner or not.
+ * time, a principal, whose something is, or a path in someone's namespace.
+ * The last three are worded for whoever reads the line ({@link Provenance.Reader}).
  * The text is stored as built and never changed, so a stored turn reads the
- * same every time.</p>
+ * same every time for the same reader.</p>
  */
 public final class RouteText {
 
@@ -34,8 +35,10 @@ public final class RouteText {
 	public static final AString TIME = Strings.intern("time");
 	/** A part naming a principal, shown as the agent's owner or not. */
 	public static final AString WHO = Strings.intern("who");
-	/** A part naming whose something is: the agent's owner's, or another's. */
+	/** A part naming whose something is: the reader's, its owner's, or another's. */
 	public static final AString WHOSE = Strings.intern("whose");
+	/** A part naming a path in a principal's namespace ({@link covia.api.Fields#OWNER}), shown relative to a reader in that namespace. */
+	public static final AString REF = Strings.intern("ref");
 
 	/** Longest fixed wording one part keeps, in characters. */
 	public static final int MAX_WORDS = 120;
@@ -133,14 +136,26 @@ public final class RouteText {
 			return add(Maps.of(TIME, CVMLong.create(millis)));
 		}
 
-		/** A principal: shown as the agent's owner, or as who it is and that it is not the owner. */
+		/** A principal: named as the reader refers to it, such as "your owner" or "user did:…". */
 		public Builder who(AString did) {
 			return (did == null) ? this : add(Maps.of(WHO, did));
 		}
 
-		/** Whose something is: "your owner's" for the agent's owner, otherwise the principal's. */
+		/** Whose something is: "your owner's" for an agent's owner, "your" for the reader's own, otherwise the principal's. */
 		public Builder whose(AString did) {
 			return (did == null) ? this : add(Maps.of(WHOSE, did));
+		}
+
+		/**
+		 * A path in {@code owner}'s namespace, such as a callable's
+		 * {@code x/callable/<name>}: shown as the path to a reader in that
+		 * namespace and as {@code <owner>/<path>} to anyone else, so either is a
+		 * reference the reader can use. Shown when the path is one word of a
+		 * path's characters, otherwise as unreadable.
+		 */
+		public Builder ref(AString owner, AString path) {
+			if (path == null) return this;
+			return add((owner == null) ? Maps.of(REF, path) : Maps.of(REF, path, covia.api.Fields.OWNER, owner));
 		}
 
 		public RouteText build() {

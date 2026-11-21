@@ -133,7 +133,7 @@ public class HITLAdapterTest {
 		Job direct = request(ALICE, Hitl.request("Direct").ask(Hitl.approval("ok", "OK?").required()).build());
 		assertEquals(Status.INPUT_REQUIRED, direct.getStatus(), direct.getErrorMessage());
 		assertEquals(ALICE.getRoute(), readRecord(ALICE, direct.getID().toHexString()).get(Fields.ROUTE),
-			"a direct request's route is where it signed in");
+			"a direct request's route says it was direct");
 
 		String bearer = RT.getIn(engine.jobs().invokeOperation("v/ops/token/create", Maps.of(
 			Fields.NAME, "outside-bot", Fields.ACCESS, Maps.of("test", Maps.empty()),
@@ -147,6 +147,22 @@ public class HITLAdapterTest {
 		assertEquals(ALICE_DID, covia.grid.Attribution.caller(record, ALICE_DID), "a request through a token is its issuer's");
 		assertEquals(viaToken.getRoute(), record.get(Fields.ROUTE), "and its route says the token carried it");
 		assertFalse(record.toString().contains(bearer), "the bearer is never recorded");
+
+		// The inbox's listing says, for whoever lists it, where each request came from
+		AVector<ACell> items = RT.ensureVector(RT.getIn(engine.jobs().invokeOperation("v/ops/hitl/list",
+			Maps.of("status", "open"), ALICE).awaitResult(5000), Hitl.ITEMS));
+		covia.venue.Provenance.Reader alice = covia.venue.Provenance.Reader.person(engine, ALICE_DID);
+		String fromToken = null, fromDirect = null;
+		for (ACell item : items) {
+			Object id = RT.getIn(item, Hitl.ID);
+			String from = String.valueOf(RT.getIn(item, Hitl.FROM));
+			if (String.valueOf(id).equals(String.valueOf(RT.getIn(record, Hitl.ID)))) fromToken = from;
+			if (String.valueOf(id).equals(String.valueOf(RT.getIn(readRecord(ALICE, direct.getID().toHexString()), Hitl.ID)))) fromDirect = from;
+		}
+		assertEquals(covia.venue.Provenance.of(record.assoc(Fields.CALLER, ALICE_DID)).text(alice), fromToken);
+		assertTrue(fromToken.startsWith(covia.venue.Provenance.YOU + " via token"), fromToken);
+		assertTrue(fromToken.contains("x/token/outside-bot"), "it names the token by a reference Alice can use: " + fromToken);
+		assertEquals(covia.venue.Provenance.YOU + " directly", fromDirect);
 		direct.cancel();
 		carried.cancel();
 	}

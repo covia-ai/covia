@@ -429,7 +429,7 @@ public class AgentAdapterTest {
 		assertEquals(ALICE_DID, bindingRecord.get(Fields.OWNER));
 		assertEquals(Maps.of("id", "sender-1"), bindingRecord.get(Strings.create("sender")));
 		assertNull(alice.getAuthentication(), "only a channel context carries a record");
-		assertEquals(Strings.create("auth"), RT.getIn(alice.getRoute(), 0, Fields.VIA), "a request made for Alice starts where she signed in");
+		assertEquals(CVMBool.TRUE, RT.getIn(alice.getRoute(), 0, RequestContext.ROUTE_DIRECT), "a request made in process for Alice is hers directly");
 		assertEquals(ALICE_DID, RT.getIn(alice.getRoute(), 0, Fields.PRINCIPAL));
 
 		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("provenance-ingress");
@@ -533,8 +533,8 @@ public class AgentAdapterTest {
 		assertEquals(Vectors.empty(), firstTurn(agent, keptSid).get(Fields.ROUTE),
 			"work rebuilt with no route of its own records an empty one, never none");
 		AVector<ACell> bobsRoute = RT.ensureVector(firstTurn(agent, callSid).get(Fields.ROUTE));
-		assertEquals(2, bobsRoute.count(), "Bob signed in, then the callable handed his request to Alice: " + bobsRoute);
-		assertEquals(Strings.create("auth"), RT.getIn(bobsRoute, 0, Fields.VIA));
+		assertEquals(2, bobsRoute.count(), "Bob asked directly, then the callable handed his request to Alice: " + bobsRoute);
+		assertEquals(CVMBool.TRUE, RT.getIn(bobsRoute, 0, RequestContext.ROUTE_DIRECT));
 		assertEquals(BOB_DID, RT.getIn(bobsRoute, 0, Fields.PRINCIPAL), "the request started with Bob");
 		AMap<AString, ACell> callableStep = RT.ensureMap(bobsRoute.get(1));
 		assertEquals(Strings.create("callable"), callableStep.get(Fields.VIA));
@@ -588,7 +588,7 @@ public class AgentAdapterTest {
 		assertEquals(ALICE_DID, turn.get(Fields.CALLER), "the innermost call is its issuer's work");
 		AVector<ACell> route = RT.ensureVector(turn.get(Fields.ROUTE));
 		assertEquals(3, route.count(), String.valueOf(route));
-		assertEquals(Strings.create("auth"), RT.getIn(route, 0, Fields.VIA));
+		assertEquals(CVMBool.TRUE, RT.getIn(route, 0, RequestContext.ROUTE_DIRECT));
 		assertEquals(carol, RT.getIn(route, 0, Fields.PRINCIPAL), "the request started with Carol");
 		assertEquals(Strings.create("relay"), RT.getIn(route, 1, Fields.NAME));
 		assertEquals(BOB_DID, RT.getIn(route, 1, Fields.OWNER));

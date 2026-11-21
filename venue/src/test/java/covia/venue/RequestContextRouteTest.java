@@ -15,6 +15,7 @@ import convex.core.data.Blob;
 import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.Vectors;
+import convex.core.data.prim.CVMBool;
 import convex.core.data.prim.CVMLong;
 import convex.core.lang.RT;
 import covia.api.Fields;
@@ -40,10 +41,14 @@ public class RequestContextRouteTest {
 	}
 
 	@Test
-	public void aRequestStartsWhereItSignedIn() {
-		assertEquals(Vectors.of(Maps.of(Fields.VIA, RequestContext.SIGN_IN, Fields.PRINCIPAL, ALICE,
-			Fields.TEXT, RequestContext.SIGNED_IN.parts())), RequestContext.of(ALICE).getRoute(),
-			"a request an in-process caller makes starts where it signed in");
+	public void aRequestStartsWhereItEntered() {
+		AVector<ACell> direct = Vectors.of(Maps.of(RequestContext.ROUTE_DIRECT, CVMBool.TRUE, Fields.PRINCIPAL, ALICE));
+		assertEquals(direct, RequestContext.of(ALICE).getRoute(), "a request an in-process caller makes is its principal's directly");
+		assertEquals(direct, TestEngine.ENGINE.requestContext(ALICE, null).getRoute());
+		AMap<AString, ACell> door = RT.ensureMap(TestEngine.ENGINE.requestContext(ALICE, null, Strings.create("http"), null, null)
+			.getRoute().get(0));
+		assertEquals(RequestContext.SIGN_IN, door.get(Fields.VIA), "a request a door authenticated starts where it signed in");
+		assertEquals(ALICE, door.get(Fields.PRINCIPAL));
 		assertNull(TestEngine.ENGINE.context(ALICE).getRoute(), "a context the venue makes for its own work has none");
 	}
 

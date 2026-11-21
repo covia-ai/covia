@@ -51,10 +51,10 @@ public final class Labels {
 		NO_INPUT("No input", "no-input", false),
 		BUDGET("Context budget", "context-budget", true),
 		UNAVAILABLE_TOOLS("Unavailable tools", "unavailable-tools", false),
-		/** Who the following turn came from ({@link TurnProvenance}); attributes vary by turn. */
+		/** Who the following turn came from, for a turn stored before routes named where they started ({@link TurnProvenance}); attributes vary by turn. */
 		FROM("From: %s", "from", true),
-		/** Who the following turn came from, for a turn whose route names where its request started: one sentence ({@link TurnProvenance}). */
-		FROM_VENUE("From (venue-verified): %s", "from", true);
+		/** Who the following turn came from: one sentence ({@link covia.venue.Provenance}). */
+		FROM_ROUTE("From %s", "from", true);
 
 		final String pattern;
 		final String tag;
@@ -121,13 +121,13 @@ public final class Labels {
 	/**
 	 * A label-only element that is one venue-written sentence: the bracket and
 	 * header label is {@code kind}'s pattern filled with it; xml carries it as
-	 * the element's escaped text, marked as the venue's. Brackets and line
-	 * breaks never reach the label, so the sentence cannot close it.
+	 * the element's escaped text. Brackets and line breaks never reach the
+	 * label, so the sentence cannot close it.
 	 */
 	public static String renderSentence(AString dialect, Kind kind, String sentence) {
 		String line = sentence.replace('[', '(').replace(']', ')').replace('\n', ' ').replace('\r', ' ');
 		if (XML.equals(dialect)) {
-			return "<" + kind.tag + " verified=\"venue\">" + attr(line).replace(">", "&gt;") + "</" + kind.tag + ">";
+			return "<" + kind.tag + ">" + attr(line).replace(">", "&gt;") + "</" + kind.tag + ">";
 		}
 		String label = String.format(kind.pattern, line);
 		return HEADER.equals(dialect) ? "## " + label : "[" + label + "]";

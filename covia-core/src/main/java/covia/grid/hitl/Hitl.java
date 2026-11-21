@@ -78,6 +78,8 @@ public class Hitl {
 	public static final AString TOKEN    = Strings.intern("token");
 	public static final AString ITEMS    = Strings.intern("items");
 	public static final AString COUNT    = Strings.intern("count");
+	/** On a listed request: who it came from and how it reached the inbox, worded for whoever lists it. */
+	public static final AString FROM     = Strings.intern("from");
 
 	public static final AString WITH = Strings.intern("with");
 	public static final AString CAN  = Strings.intern("can");

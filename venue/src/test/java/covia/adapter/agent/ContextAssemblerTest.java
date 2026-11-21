@@ -1441,7 +1441,7 @@ public class ContextAssemblerTest {
 		// Ordinary DIDs show exactly as they are
 		for (String did : new String[] {"did:web:venue.example%3A8080:u:alice", "did:key:z6MkBob:g:helper-2",
 				engine.publicPrincipal().toString(), engine.getDIDString().toString()}) {
-			assertEquals(did, TurnProvenance.shownDid(Strings.create(did)));
+			assertEquals(did, covia.venue.Provenance.shownDid(Strings.create(did)));
 			assertNotEquals(TurnProvenance.Relationship.UNKNOWN, TurnProvenance.relationship(engine, ctx, Strings.create(did)), did);
 		}
 		// A caller that is not a DID, or too long to show, is unreadable and never rendered

@@ -4932,15 +4932,15 @@ public class Engine {
 	}
 
 	/**
-	 * The context of a request a door of the venue authenticated as
-	 * {@code principal}, or presenting access token {@code token}: as it acts
-	 * now ({@link #context(AString)}, {@link #tokenContext}), with the
-	 * principal that acts in it as its origin, the token's issuer for a token
-	 * ({@link RequestContext#getOrigin()}). Only a door that
-	 * authenticated the request makes one, so that only such a request can be
-	 * the user in person ({@link #inPersonDenial}). Its route starts where it
-	 * entered: the token's record, or a sign-in vouching for the principal, which
-	 * says so of an anonymous caller ({@link RequestContext#getRoute}).
+	 * The context of a request an in-process caller, trusted code acting in
+	 * the principal's own context, makes as {@code principal}, or presenting
+	 * access token {@code token}: as it acts now ({@link #context(AString)},
+	 * {@link #tokenContext}), with the principal that acts in it as its origin,
+	 * the token's issuer for a token ({@link RequestContext#getOrigin()}). Only
+	 * a caller that authenticated the request makes one, so that only such a
+	 * request can be the user in person ({@link #inPersonDenial}). Its route
+	 * starts where it entered: the token's record, or a direct start vouching
+	 * for the principal, since no adapter carried it ({@link RequestContext#getRoute}).
 	 *
 	 * @param principal the authenticated caller, or null for anonymous
 	 * @param token the access token's reference the request presented, or null
@@ -4950,21 +4950,23 @@ public class Engine {
 		if (token != null) return tokenContext(token).asOrigin();
 		RequestContext ctx = context(principal).asOrigin();
 		if (ctx.getOrigin() == null) return ctx;
-		return ctx.via(RequestContext.SIGN_IN, Maps.empty(),
-			isPublicPrincipal(ctx.getOrigin()) ? RequestContext.NOT_SIGNED_IN : RequestContext.SIGNED_IN);
+		return ctx.withRoute(Vectors.of(RequestContext.directRecord(ctx.getOrigin())));
 	}
 
 	/**
-	 * An authenticated ingress request with transport provenance on its first
-	 * route record (AGENT_CONTEXT.md §1.2). Only trusted ingress code supplies
-	 * these facts; protocol and credential type are absent when unknown. This
-	 * changes neither authority nor authentication evidence. No credential bytes,
+	 * The context of a request a door of the venue authenticated, with transport
+	 * provenance on its first route record (AUTHORITY.md, Provenance): as
+	 * {@link #requestContext(AString, AMap)}, except that a request without a
+	 * token starts at a sign-in vouching for the principal, which says so of an
+	 * anonymous caller. Only trusted ingress code supplies these facts;
+	 * protocol and credential type are absent when unknown. This changes
+	 * neither authority nor authentication evidence. No credential bytes,
 	 * client-supplied labels or claims of human presence belong here.
 	 */
 	public RequestContext requestContext(AString principal, AMap<AString, ACell> token,
 			AString transport, AString protocol, AString credentialType) {
 		java.util.Objects.requireNonNull(transport, "transport");
-		RequestContext ctx = requestContext(principal, token);
+		RequestContext ctx = (token != null) ? tokenContext(token).asOrigin() : signedIn(principal);
 		AVector<ACell> route = ctx.getRoute();
 		if (route == null || route.isEmpty()) return ctx;
 		AMap<AString, ACell> first = RT.ensureMap(route.get(0));
@@ -4980,6 +4982,14 @@ public class Engine {
 		AVector<ACell> previousText = RT.ensureVector(first.get(Fields.TEXT));
 		first = first.assoc(Fields.TEXT, previousText.concat(text.build().parts()));
 		return ctx.withRoute(route.assoc(0, first));
+	}
+
+	/** {@code principal}'s context as a door that authenticated it makes it: its origin, its route started at a sign-in. */
+	private RequestContext signedIn(AString principal) {
+		RequestContext ctx = context(principal).asOrigin();
+		if (ctx.getOrigin() == null) return ctx;
+		return ctx.via(RequestContext.SIGN_IN, Maps.empty(),
+			isPublicPrincipal(ctx.getOrigin()) ? RequestContext.NOT_SIGNED_IN : RequestContext.SIGNED_IN);
 	}
 
 	/**
@@ -5495,8 +5505,10 @@ public class Engine {
 	public RequestContext tokenContext(AMap<AString, ACell> reference) {
 		AccessToken token = resolveToken(reference);
 		if (token == null) throw new AuthException(TOKEN_NOT_STANDING + RT.getIn(reference, Fields.NAME));
+		AString name = RT.ensureString(reference.get(Fields.NAME));
 		return narrowedByToken(context(token.owner(), token.issuer()), reference).via(TOKEN_ADAPTER, reference,
-			covia.venue.RouteText.builder().text("access token ").name(reference.get(Fields.NAME))
+			covia.venue.RouteText.builder().text("access token ")
+				.ref(token.owner(), (name == null) ? null : Strings.create("x/token/" + name))
 				.text(", held by someone the venue does not know").build());
 	}
 

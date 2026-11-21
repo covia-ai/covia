@@ -342,7 +342,7 @@ public class CallableAdapter extends AAdapter {
 		// reference, vouching for the issuer, after the record of whoever called
 		RequestContext frame = engine.callContext(ctx, callable.reference());
 		RequestContext call = frame.via(ADAPTER, callable.reference(),
-			RouteText.builder().name(callable.reference().get(Fields.NAME)).build());
+			RouteText.builder().ref(callable.owner(), resource(callable.name())).build());
 		if (!engine.authorityCovers(ctx, resource, Abilities.CALLABLE_CALL)) {
 			if (!gated(ctx, callable)) throw hidden.get();
 			String refused = engine.jobs().evaluateCallableGate(callable.gate(), resource, input, ctx, call);

@@ -15,7 +15,7 @@
 		"output": {
 			"type": "object",
 			"properties": {
-				"items": { "type": "array", "description": "Request summaries: {id, caller, title, status, created, expires?}" },
+				"items": { "type": "array", "description": "Request summaries: {id, caller, from, title, status, created, expires?}. from says who the request came from and how it reached the inbox, such as through an access token or a callable, worded for you." },
 				"count": { "type": "integer" }
 			}
 		}

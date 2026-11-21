@@ -131,6 +131,8 @@ public class RequestContext {
 	public static final int ROUTE_HEAD = 2;
 	/** The key of a route entry standing for steps folded out of its middle; its value is their count. */
 	public static final AString ROUTE_ELIDED = Strings.intern("elided");
+	/** The key, true, of a route's first record when its principal made the request directly, in process, so nothing carried it ({@link #directRecord}). */
+	public static final AString ROUTE_DIRECT = Strings.intern("direct");
 
 	/**
 	 * Where this request started and each handover that carried it here, one
@@ -138,8 +140,10 @@ public class RequestContext {
 	 * stamped: one the venue makes for its own work. Each record names the
 	 * adapter that wrote it ({@code via}) and the principal it vouches for
 	 * ({@code principal}), with the adapter's own fields and text. The first
-	 * record of a request a door authenticated names its origin.
-	 * Attribution only; its shape is venue-internal (AGENT_CONTEXT.md §1.2).
+	 * record of a request a door authenticated names its origin, and that of
+	 * a request an in-process caller made is a direct start
+	 * ({@link #directRecord}). Attribution only; its shape is venue-internal
+	 * (AUTHORITY.md, Provenance).
 	 */
 	public AVector<ACell> getRoute() { return (carried == null) ? null : carried.route(); }
 
@@ -290,19 +294,29 @@ public class RequestContext {
 
 	/**
 	 * A context for {@code authority} with {@code origin}: a request an
-	 * in-process caller makes for that principal starts where it signed in, so
-	 * its route's first record is a sign-in vouching for the origin
-	 * ({@link #getRoute}). One with no origin, which the venue makes for its own
-	 * work, has no route.
+	 * in-process caller makes for that principal is the principal's own, so
+	 * its route's first record is a direct start vouching for the origin
+	 * ({@link #directRecord}). One with no origin, which the venue makes for
+	 * its own work, has no route.
 	 */
 	private RequestContext(Authority authority, AString origin) {
 		this(authority, new ExecutionScope(authority.getUserDID(), null, null, null, null, -1L, null),
 			null, null, null, null, null, false, null, null, null,
-			(origin == null) ? null : Carried.of(null, Vectors.of(routeRecord(SIGN_IN, origin, convex.core.data.Maps.empty(), SIGNED_IN))),
+			(origin == null) ? null : Carried.of(null, Vectors.of(directRecord(origin))),
 			origin, null, null);
 	}
 
-	/** The adapter whose record starts a request a door, or an in-process caller, authenticated. */
+	/**
+	 * The record that starts a request {@code principal} made directly: trusted
+	 * code in process, acting in the principal's own context, so no adapter
+	 * carried it. It names no adapter ({@code via}), only the principal and
+	 * {@link #ROUTE_DIRECT}.
+	 */
+	static AMap<AString, ACell> directRecord(AString principal) {
+		return convex.core.data.Maps.of(ROUTE_DIRECT, convex.core.data.prim.CVMBool.TRUE, covia.api.Fields.PRINCIPAL, principal);
+	}
+
+	/** The adapter whose record starts a request a door of the venue authenticated. */
 	static final AString SIGN_IN = Strings.intern(covia.adapter.AuthAdapter.NAME);
 	/** What a sign-in's record says of a principal that signed in. */
 	static final RouteText SIGNED_IN = RouteText.of("signed in");
@@ -392,7 +406,7 @@ public class RequestContext {
 	 *
 	 * <p>The host making it vouches that {@code callerDID} is present: it is
 	 * the context's origin ({@link #getOrigin()}), and its route starts with a
-	 * sign-in vouching for it ({@link #getRoute()}).</p>
+	 * direct start vouching for it ({@link #directRecord}).</p>
 	 */
 	public static RequestContext of(AString callerDID) {
 		if (callerDID == null) return ANONYMOUS;
