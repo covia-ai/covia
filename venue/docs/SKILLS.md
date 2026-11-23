@@ -279,7 +279,7 @@ skills. A loaded skill's header gives its exact removal key.
 
 ```
 skill_load {
-  name?:     string   — a skill name from the [Skills] index
+  name?:     string   — a skill name from the [Skills] index or an earlier load's revealed skills
   ref?:      string   — direct address of a skill (a/<hash>, v/skills/<x>, w/skills/<x>)
   budget?:   integer  — accounting budget (default: skill.budget, else 2000; clamp [256, 10000])
   volatile?: boolean  — watch the skill source and append only when its rendered value changes
