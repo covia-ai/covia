@@ -155,9 +155,9 @@ A loaded skill can contribute **further sources** through its own
            "skills": ["w/team-skills/sql-review"]}}
 ```
 
-Children are **discovered, not auto-loaded**. Loading the parent returns a
-refreshed `skillIndex`, makes its children loadable by name from the next
-step, and lists them in the following turn's index; loading a child may reveal
+Children are **discovered, not auto-loaded**. Loading the parent makes its
+children loadable by name from the next step, and its result names them
+(`revealed`) with their index lines (`skillIndex`); loading a child may reveal
 another layer. The resolver never walks an unloaded subtree, so cycles are
 inert and a broad hierarchy never floods the prompt.
 

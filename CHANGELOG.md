@@ -18,6 +18,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A request the venue's own code makes for a principal reads as that principal directly rather than as a sign-in.
 - The owner's messages carry the `[From …]` hint only when where they come from changes, so a conversation over one HTTP login or access token is labelled once; every other source is still labelled on every message.
 
+### Fixed
+
+- `skill_load` reports only what a load newly makes discoverable: `revealed` no longer repeats skills an earlier load revealed, and `skillIndex` holds just their index lines instead of every discoverable skill, and is left out when nothing is new.
+
 ## [0.12.0] - 2026-11-20
 
 ### Added
