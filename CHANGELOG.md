@@ -8,6 +8,8 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-23
+
 ### Fixed
 
 - `skill_load` reports only what a load newly makes discoverable: `revealed` no longer repeats skills an earlier load revealed, and `skillIndex` holds just their index lines instead of every discoverable skill, and is left out when nothing is new.
@@ -1125,7 +1127,8 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.12.0...HEAD
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.12.1...HEAD
+[0.12.1]: https://github.com/covia-ai/covia/compare/0.12.0...0.12.1
 [0.12.0]: https://github.com/covia-ai/covia/compare/0.11.0...0.12.0
 [0.11.0]: https://github.com/covia-ai/covia/compare/0.10.0...0.11.0
 [0.10.0]: https://github.com/covia-ai/covia/compare/0.9.11...0.10.0
