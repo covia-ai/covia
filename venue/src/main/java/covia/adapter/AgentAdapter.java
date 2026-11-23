@@ -4480,10 +4480,16 @@ public class AgentAdapter extends AAdapter {
 	 * Records a forced trigger's wake on the agent, so that the next cycle to
 	 * begin runs for it however the trigger and the run loop interleave, as a
 	 * message's write does for the message (AGENT_LOOP.md §4.6). An agent
-	 * triggering itself from its own cycle asks for no further cycle.
+	 * triggering itself from its own cycle asks for no further cycle, and a
+	 * trigger the agent cannot run records none: one during shutdown, one to an
+	 * agent without a transition operation, or one to a stopped agent
+	 * ({@link Agent#wake}).
 	 */
 	private void recordTriggerWake(AgentTarget target, Agent agent, RequestContext ctx) {
-		if (isOwnLiveLoop(target.ownerDID(), target.agentId(), ctx.getAuthorityDID())) return;
+		AString ownerDID = target.ownerDID();
+		AString agentId = target.agentId();
+		if (engine.isClosing() || resolveTransitionOp(ownerDID, agentId) == null) return;
+		if (isOwnLiveLoop(ownerDID, agentId, ctx.getAuthorityDID())) return;
 		agent.wake();
 	}
 

@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInfo;
 
 import convex.core.data.ACell;
+import convex.core.data.AMap;
 import convex.core.data.AString;
 import convex.core.data.Blob;
 import convex.core.data.Maps;
@@ -205,6 +206,31 @@ public class AgentTriggersItselfTest {
 				TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
 			Job held = holdCycle(gate);
 			asAgent("v/ops/agent/trigger", Maps.of(Fields.AGENT_ID, agentId));
+
+			gate.release();
+			held.awaitResult(10_000);
+			watch.awaitRest(1);
+		}
+		assertEquals(1, agent.getTimeline().count());
+		assertFalse(agent.hasDueWake(Long.MAX_VALUE), "no wake waits for the agent");
+	}
+
+	/**
+	 * The agent's own trigger through the zero-Job kick, the path its tool loop
+	 * calls, asks for no further cycle either, so a model that triggers itself
+	 * on every cycle does not keep its agent running.
+	 */
+	@Test
+	public void triggeringItselfThroughTheKickAsksForNoFurtherCycle() throws Exception {
+		Agent agent = engine.getVenueState().users().user(owner).agent(agentId);
+		AgentAdapter adapter = (AgentAdapter) engine.getAdapter("agent");
+		AMap<AString, ACell> trigger = Maps.of(s("operation"), Maps.of(s("adapter"), s("agent:trigger")));
+		try (AgentWatch watch = AgentWatch.open(engine, owner, agentId);
+				TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			Job held = holdCycle(gate);
+			ACell kicked = adapter.invokeFuture(agentCtx, trigger, Maps.of(Fields.AGENT_ID, agentId))
+				.get(PROMPT_MS, TimeUnit.MILLISECONDS);
+			assertEquals(Agent.RUNNING, RT.getIn(kicked, Fields.STATUS));
 
 			gate.release();
 			held.awaitResult(10_000);
