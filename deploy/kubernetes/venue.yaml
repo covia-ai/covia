@@ -72,6 +72,9 @@ spec:
         fsGroup: 1001
         seccompProfile:
           type: RuntimeDefault
+      # Time to stop before Kubernetes kills the venue: keep it well above the
+      # venue's shutdown.graceMs (2 seconds by default).
+      terminationGracePeriodSeconds: 30
       containers:
         - name: venue
           image: ghcr.io/covia-ai/covia:stable   # CHANGE: pin a release, ghcr.io/covia-ai/covia:<x.y.z>
@@ -115,10 +118,20 @@ spec:
             - name: config
               mountPath: /config
               readOnly: true
+            # To keep the venue's identity in a Secret rather than on the volume,
+            # uncomment this and the identity volume below, and add
+            # "seed": { "file": "/secrets/seed" } to the config (README.md).
+            # - name: identity
+            #   mountPath: /secrets
+            #   readOnly: true
       volumes:
         - name: config
           configMap:
             name: covia-venue-config
+        # - name: identity
+        #   secret:
+        #     secretName: covia-venue-identity
+        #     defaultMode: 0440
   volumeClaimTemplates:
     - metadata:
         name: data

@@ -58,13 +58,11 @@ curl https://venue.example.com/api/v1/status
 - There is never more than one pod: the store has a single writer. A
   StatefulSet stops the old pod before starting its replacement; a Deployment
   could run both at once on the same volume.
-- The volume holds the store, `/data/venue.etch`, and the venue's identity
-  key, `/data/venue.key`, which the venue creates on its first start. The
-  store's state belongs to that key, and the venue refuses to start on it with
-  another ([CONFIG.md, Venue identity](../../venue/docs/CONFIG.md#venue-identity)).
-  Back up the volume as a whole, while the venue is stopped: scale the
-  StatefulSet to 0 replicas, copy or snapshot the volume, and scale it back
-  to 1.
+- The volume holds the store, `/data/venue.etch`, and, unless the identity is
+  kept in a Secret (below), the venue's identity key, `/data/venue.key`, which
+  the venue creates on its first start. Back up the volume as a whole, while
+  the venue is stopped: scale the StatefulSet to 0 replicas, copy or snapshot
+  the volume, and scale it back to 1.
 - Deleting the StatefulSet keeps the volume. Deleting its claim,
   `data-covia-venue-0`, or the venue's namespace removes the volume too, with
   the store and identity key on it, wherever the StorageClass's reclaim policy
@@ -74,6 +72,64 @@ curl https://venue.example.com/api/v1/status
 - The probes call `/api/v1/status`, which answers anyone, so they work with
   anonymous access off. The startup probe allows five minutes, for a store
   collected at start-up (`etch.gc.onStart`).
+
+## Where the venue's identity lives
+
+The venue's identity is an Ed25519 seed. It signs as the venue, its DID is
+made from it, and the store's state belongs to it: the venue refuses to start
+on a store with any other key
+([CONFIG.md, Venue identity](../../venue/docs/CONFIG.md#venue-identity)).
+Whichever way it is kept, back it up with the volume.
+
+- **On the volume**, as `venue.yaml` does unless changed: the venue creates
+  `/data/venue.key` on its first start. Nothing else to set up; the DID is
+  known once the venue has started.
+- **In a Secret**, for operators who keep keys in their secret tooling, want
+  the DID before the first start, or encrypt the store and want the identity
+  off its disk. Create the Secret with 32 random bytes as hex:
+
+  ```bash
+  kubectl -n venue-example create secret generic covia-venue-identity \
+    --from-literal=seed="$(openssl rand -hex 32)"
+  ```
+
+  Then uncomment the `identity` volume and its mount in `venue.yaml`, and add
+  `"seed": { "file": "/secrets/seed" }` to the venue's config. The seed can
+  equally come from an environment variable set from the Secret,
+  `"seed": { "env": "COVIA_SEED" }`. To move an existing venue's identity into
+  a Secret, put the hex from its `/data/venue.key` in the Secret instead of a
+  new seed.
+
+## Pausing, restarting and crashes
+
+- **Pausing.** Kubernetes cannot freeze a running container. To pause a
+  venue, scale it to 0 (`kubectl -n venue-example scale
+  statefulset/covia-venue --replicas=0`): the pod stops and the volume stays.
+  Scale it back to 1 to resume.
+- **Stopping.** Kubernetes stops a pod by sending it SIGTERM, on a scale to 0,
+  a deletion, an image or config change, or a node being drained, and kills it
+  if it has not stopped within `terminationGracePeriodSeconds` (30). On
+  SIGTERM the venue takes no new work, gives running jobs up to
+  `shutdown.graceMs` (2 seconds) to finish, then pauses those that can be
+  paused and cancels the rest with "Venue shut down", and saves the store
+  ([JOBS.md, Shutdown](../../venue/docs/JOBS.md#shutdown)). Paused and
+  finished jobs are kept. Keep `terminationGracePeriodSeconds` well above
+  `shutdown.graceMs`.
+- **Crashes.** Running out of memory or losing the node kills the venue with
+  no warning. On its next start the store opens as it was, losing at most the
+  writes of the last 100 milliseconds after a process crash or 10 seconds
+  after a machine crash ([PERSISTENCE.md](../../venue/docs/PERSISTENCE.md));
+  jobs that were running are failed with "effects may or may not have
+  applied; verify state before retrying", and paused jobs come back
+  ([JOBS.md, Recovery on restart](../../venue/docs/JOBS.md#recovery-on-restart-214)).
+  An encrypted store (`etch.version: 3`) that crashes with unsaved writes
+  refuses to open until it is repaired, so the pod restarts repeatedly until
+  someone repairs or restores it.
+- **Never two at once.** The StatefulSet starts a replacement only after the
+  old pod has gone, the venue locks its store file, and a `ReadWriteOnce`
+  volume attaches to one node at a time. Never force-delete a venue's pod on a
+  node that has stopped responding: Kubernetes may then start a second copy
+  while the first still runs.
 
 ## What the ingress controller must allow
 
