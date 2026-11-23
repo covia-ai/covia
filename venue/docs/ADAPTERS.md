@@ -1237,7 +1237,10 @@ are bounded and in memory, so a restart loses only messages not yet collected.
    operation's schema only when the operation sets `operation.strict: true`,
    since many operations take dynamic input; otherwise the operation checks
    each field it needs where it reads it, and refuses a missing one with
-   `InvalidInputException` naming the field. Catch a library's exceptions where they are
+   `InvalidInputException` naming the field. A refusal of a name the adapter
+   does not know from a short list it does (a field, a choice, a setting) can
+   add `NearestNames.hint(given, known)`, which names the known one the caller
+   most likely meant, or nothing when none is close. Catch a library's exceptions where they are
    called. Anything else that escapes the operation, `IllegalArgumentException`
    included, is the adapter's fault: its Job fails with `Operation <op> failed:
    unexpected <ClassName> in adapter <name>`, logged at ERROR, and the caller
