@@ -50,7 +50,7 @@ Dependency versions are in the root `pom.xml`.
 
 `develop` is for fast iteration (default tests, direct pushes, no deployment).
 `qa` takes published develop commits for heavy tests and prereleases, then
-deploys dev venues 3/4; `master` takes releases and deploys stable venues test/1/2.
+deploys QA venues 3/4; `master` takes releases and deploys stable venues test/1/2.
 QA has no independent commits: push develop first, then `git push origin develop:qa`,
 without force. Workflow definitions must reach default branch develop first.
 See [BUILD.md](BUILD.md#development-and-qa) for promotion, acceptance and deployment.
