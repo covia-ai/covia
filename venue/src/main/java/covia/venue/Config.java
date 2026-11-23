@@ -68,8 +68,25 @@ public class Config {
 	 */
 	public static final AString STORE = Strings.intern("store");
 
-	/** Key for venue identity seed (Ed25519, 32-byte hex string). */
+	/**
+	 * Key for the venue identity seed (Ed25519, 32 bytes): hex, or read from
+	 * {@code {"env": name}} or {@code {"file": path}} (see {@link #resolveKeySource}).
+	 */
 	public static final AString SEED = Strings.intern("seed");
+
+	/** A key source naming the environment variable that holds the key as hex. */
+	private static final AString KEY_ENV = Strings.intern("env");
+	/** A key source naming the file that holds the key as hex. */
+	private static final AString KEY_FILE = Strings.intern("file");
+
+	/** What a key source ({@code seed}, {@code etch.key}) must be. */
+	public static final String KEY_SOURCE_SHAPE = "must be a 32-byte hex string, {\"env\": name} or {\"file\": path}";
+	/** A key source names an environment variable that is not set: the variable. */
+	public static final String KEY_SOURCE_ENV_UNSET = "environment variable %s is not set";
+	/** A key source names a file that cannot be read: the file, then why. */
+	public static final String KEY_SOURCE_FILE_UNREADABLE = "cannot read key file %s: %s";
+	/** A key source whose value is not 32 bytes of hex. */
+	public static final String KEY_SOURCE_SIZE = "must resolve to exactly 32 bytes of hex";
 
 	/**
 	 * Key for the venue identity keystore block (#208): a PKCS12 keystore in the
@@ -515,7 +532,7 @@ public class Config {
 		optionalString(config, BIND_ADDRESS, "bindAddress");
 		optionalString(config, STORE, "store");
 		validateEtch();
-		optionalString(config, SEED, "seed");
+		getSeed();
 
 		optionalLong(config, MAX_TOOL_ITERATIONS, "maxToolIterations", 1, Integer.MAX_VALUE);
 		optionalLong(config, PORT, "port", 0, 65_535);
@@ -1598,45 +1615,57 @@ public class Config {
 
 	/** Resolves the {@code etch.key} source to the raw 32-byte encryption key. */
 	private byte[] resolveEtchKey(ACell keySource) {
+		return resolveKeySource(keySource, "etch.key");
+	}
+
+	/**
+	 * Resolves a 32-byte key as {@code seed} and {@code etch.key} take it: a hex
+	 * string in the config itself, {@code {"env": name}} for hex in an
+	 * environment variable, or {@code {"file": path}} for hex in a file, such as
+	 * a mounted Kubernetes Secret. What is read from a variable or file is
+	 * trimmed, as a value written there often ends with a newline. Fail-closed:
+	 * anything else, an unset variable, an unreadable file or a value that is
+	 * not 32 bytes of hex is a configuration error.
+	 *
+	 * @param source The configured source
+	 * @param field The setting's path, for the error
+	 * @return The key's 32 bytes
+	 */
+	static byte[] resolveKeySource(ACell source, String field) {
 		String hex;
-		if (keySource instanceof AString s) {
+		if (source instanceof AString s) {
 			hex = s.toString();
 		} else {
-			AMap<AString, ACell> m = RT.castMap(keySource);
-			AString env = (m != null) ? RT.ensureString(m.get(Strings.intern("env"))) : null;
-			AString file = (m != null) ? RT.ensureString(m.get(Strings.intern("file"))) : null;
+			AMap<AString, ACell> m = (source instanceof AMap<?, ?>) ? RT.castMap(source) : null;
+			AString env = (m != null) ? RT.ensureString(m.get(KEY_ENV)) : null;
+			AString file = (m != null) ? RT.ensureString(m.get(KEY_FILE)) : null;
 			if (env != null) {
-				hex = System.getenv(env.toString());
-				if (hex == null) {
-					throw malformed("etch.key", "environment variable " + env + " is not set");
-				}
+				String value = System.getenv(env.toString());
+				if (value == null) throw malformed(field, KEY_SOURCE_ENV_UNSET.formatted(env));
+				hex = value.trim();
 			} else if (file != null) {
 				try {
-					hex = java.nio.file.Files.readString(
-						java.nio.file.Path.of(file.toString())).trim();
+					hex = java.nio.file.Files.readString(java.nio.file.Path.of(file.toString())).trim();
 				} catch (java.io.IOException e) {
-					throw malformed("etch.key",
-						"cannot read key file " + file + ": " + e.getMessage());
+					throw malformed(field, KEY_SOURCE_FILE_UNREADABLE.formatted(file, e.getMessage()));
 				}
 			} else {
-				throw malformed("etch.key",
-					"must be a 32-byte hex string, {\"env\": name} or {\"file\": path}");
+				throw malformed(field, KEY_SOURCE_SHAPE);
 			}
 		}
 		convex.core.data.Blob key = convex.core.data.Blob.fromHex(hex);
-		if (key == null || key.count() != 32) {
-			throw malformed("etch.key", "must resolve to exactly 32 bytes of hex");
-		}
+		if (key == null || key.count() != 32) throw malformed(field, KEY_SOURCE_SIZE);
 		return key.getBytes();
 	}
 
 	/**
-	 * Get the venue identity seed (Ed25519, 32-byte hex).
+	 * Get the venue identity seed (Ed25519, 32 bytes) from the {@code seed}
+	 * setting, read from its environment variable or file when it names one.
 	 * @return Hex seed string, or null if not configured
 	 */
 	public String getSeed() {
-		AString seedVal = RT.ensureString(config.get(SEED));
-		return (seedVal != null) ? seedVal.toString() : null;
+		ACell source = config.get(SEED);
+		return (source == null) ? null : convex.core.data.Blob.wrap(resolveKeySource(source, "seed")).toHexString();
 	}
 
 	/**

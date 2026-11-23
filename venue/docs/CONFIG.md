@@ -75,7 +75,7 @@ Venue state (lattice, agents, secrets, DLFS) is persisted via Etch store:
 ```
 
 - `store`: `"temp"` (default, deleted on exit), `"memory"`, or file path
-- `seed`: Ed25519 hex seed for stable venue identity. If omitted with a persistent store, auto-generated and saved to `venue.key` alongside the store file. On POSIX filesystems this raw seed is created with owner-only permissions (`0600`), and existing key-file permissions are repaired on each launch. On non-POSIX filesystems it inherits the platform ACL policy.
+- `seed`: Ed25519 seed for stable venue identity, as 32 bytes of hex, or read from where the operator keeps it: `{"env": "VAR"}` or `{"file": "/secrets/seed"}`, as for `etch.key` below (a value read from either is trimmed). If omitted with a persistent store, auto-generated and saved to `venue.key` alongside the store file. On POSIX filesystems this raw seed is created with owner-only permissions (`0600`), and existing key-file permissions are repaired on each launch. On non-POSIX filesystems it inherits the platform ACL policy.
 
 ### Garbage collection at startup (`etch.gc.onStart`)
 
@@ -133,8 +133,9 @@ the venue's store — including **encrypted Etch v3**:
   wrote, and one that crashes with writes since that flush needs repair before
   it opens ([PERSISTENCE.md](PERSISTENCE.md)).
 - `key` is Covia-side: the 32-byte store encryption key as hex, sourced from
-  `{"env": "VAR"}`, `{"file": "path"}` (operator-secured file), or an inline
-  hex string (dev/test only — never commit key material).
+  `{"env": "VAR"}`, `{"file": "path"}` (operator-secured file, such as a
+  mounted Kubernetes Secret), or an inline hex string (dev/test only — never
+  commit key material). A value read from a variable or file is trimmed.
 - **Key identity** (consistent with venue key management): the master key is
   treated as an Ed25519 seed and identified by its derived public key — the
   same identifier scheme as venue identity keys and keystore aliases. New
@@ -144,9 +145,10 @@ the venue's store — including **encrypted Etch v3**:
   with a precise identification error, never a decrypt failure.
 - The store key is **independent of the venue identity `seed`** — rotate and
   guard them separately. For an encrypted store, configure the identity via
-  `seed`/`keystore` rather than relying on the auto-generated plaintext
-  `venue.key` beside the store (the venue warns about that combination:
-  encrypted data with the identity readable off the same disk).
+  `seed` (from a file or variable kept off the store's disk) or `keystore`
+  rather than relying on the auto-generated plaintext `venue.key` beside the
+  store (the venue warns about that combination: encrypted data with the
+  identity readable off the same disk).
 - For an encrypted **vault**, keep content in the store: with
   `storage.content: file`, asset content bytes are written outside the
   encrypted store as plaintext files (the venue warns). The lattice default
@@ -182,6 +184,13 @@ persistent store → freshly generated. A venue on an ephemeral store
 (`temp`/`memory`) without `seed`/`keystore` gets a **new DID every start —
 by design** (#208): a stable identity is something the operator pins
 explicitly, not something the venue persists behind their back.
+
+`seed` takes the identity from wherever the operator keeps it: inline hex,
+an environment variable (`{"env": "COVIA_SEED"}`) or a file (`{"file":
+"/secrets/seed"}`), each holding 32 bytes of hex. A source that cannot be
+read, or does not hold a seed, fails the start. A store belongs to the key
+that created it, so moving an existing venue's identity off its volume means
+putting the hex from its `venue.key` in the variable or file `seed` names.
 
 For managed keys, point the venue at a PKCS12 keystore in the Convex format
 (so keys are created/listed with the Convex CLI — `convex key generate`):

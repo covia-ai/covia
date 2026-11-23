@@ -419,7 +419,8 @@ public class VenueServer {
 	/**
 	 * Resolves the venue identity keypair from config or key file.
 	 * <ol>
-	 *   <li>Config {@code "seed"} — explicit hex seed (32 bytes)</li>
+	 *   <li>Config {@code "seed"} — a 32-byte hex seed, inline or read from an
+	 *       environment variable or file ({@link Config#resolveKeySource})</li>
 	 *   <li>Config {@code "keystore"} — PKCS12 keystore in the Convex format (#208);
 	 *       any load failure is fatal, never a silent fallback to a generated key</li>
 	 *   <li>Key file next to store — auto-persisted on first run</li>
@@ -500,8 +501,8 @@ public class VenueServer {
 		EtchConfig ec = config.getEtchConfig();
 		if (ec != null && ec.getCipherMode() != EtchConfig.CipherMode.NONE) {
 			log.warn("Venue identity seed sits in plaintext at {} beside an ENCRYPTED Etch store — "
-				+ "disk theft still yields the venue identity. Prefer 'seed' or a 'keystore' "
-				+ "in configuration, and remove the key file.", keyFile);
+				+ "disk theft still yields the venue identity. Prefer 'seed' (from a file or "
+				+ "environment variable kept off this disk) or a 'keystore', and remove the key file.", keyFile);
 		}
 	}
 

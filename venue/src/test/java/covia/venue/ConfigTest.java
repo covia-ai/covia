@@ -6,7 +6,11 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import convex.core.data.Maps;
 import convex.core.data.Strings;
@@ -283,6 +287,48 @@ public class ConfigTest {
 				Strings.create("sessionDelete"), convex.core.data.prim.CVMBool.FALSE))));
 		assertEquals(convex.core.data.prim.CVMBool.FALSE,
 			c.getAdapterConfig("agent").get(Strings.create("sessionDelete")));
+	}
+
+	// ========== Key sources: seed and etch.key ==========
+
+	private static final String SEED_HEX = "51".repeat(32);
+
+	@Test
+	public void testSeedComesFromConfigOrAFile(@TempDir Path dir) throws Exception {
+		assertNull(new Config(null).getSeed());
+		assertEquals(SEED_HEX, new Config(Maps.of(Config.SEED, SEED_HEX)).getSeed());
+		Path file = dir.resolve("seed");
+		Files.writeString(file, SEED_HEX + "\n");
+		assertEquals(SEED_HEX, new Config(Maps.of(Config.SEED, Maps.of("file", file.toString()))).getSeed(),
+			"a file's value is trimmed, as a mounted Secret's may end with a newline");
+	}
+
+	@Test
+	public void testSeedSourceMistakesAreRefusedAtConfiguration(@TempDir Path dir) {
+		String unset = "COVIA_TEST_UNSET_" + Long.toHexString(System.nanoTime());
+		assertTrue(refusal(Maps.of(Config.SEED, Maps.of("env", unset))).endsWith(Config.KEY_SOURCE_ENV_UNSET.formatted(unset)));
+		String missing = dir.resolve("missing").toString();
+		assertTrue(refusal(Maps.of(Config.SEED, Maps.of("file", missing))).contains(Config.KEY_SOURCE_FILE_UNREADABLE.formatted(missing, "")));
+		assertTrue(refusal(Maps.of(Config.SEED, "51".repeat(16))).endsWith(Config.KEY_SOURCE_SIZE));
+		assertTrue(refusal(Maps.of(Config.SEED, Maps.of("vault", "x"))).endsWith(Config.KEY_SOURCE_SHAPE));
+		assertTrue(refusal(Maps.of(Config.SEED, 42)).endsWith(Config.KEY_SOURCE_SHAPE));
+	}
+
+	@Test
+	public void testStoreKeyTakesTheSameSources(@TempDir Path dir) throws Exception {
+		Path file = dir.resolve("store.key");
+		Files.writeString(file, "62".repeat(32) + "\n");
+		Config c = new Config(Maps.of(Config.ETCH,
+			Maps.of("version", 3, "cipher", "aes-256-ctr", "key", Maps.of("file", file.toString()))));
+		assertTrue(c.hasEncryptedEtchPolicy());
+		assertTrue(refusal(Maps.of(Config.ETCH,
+			Maps.of("version", 3, "cipher", "aes-256-ctr", "key", "62".repeat(8)))).endsWith(Config.KEY_SOURCE_SIZE));
+	}
+
+	private static String refusal(convex.core.data.AMap<?, ?> config) {
+		@SuppressWarnings("unchecked")
+		var cfg = (convex.core.data.AMap<convex.core.data.AString, convex.core.data.ACell>) config;
+		return assertThrows(ConfigurationException.class, () -> new Config(cfg)).getMessage();
 	}
 
 	@Test

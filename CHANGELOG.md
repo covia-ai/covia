@@ -11,6 +11,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Added
 
 - Plain Kubernetes manifests and a guide for running a venue on a cluster (`deploy/kubernetes`).
+- `seed` can be read from an environment variable or a file (`{"env": …}`, `{"file": …}`), as `etch.key` can, so a venue's identity can come from a Kubernetes Secret or any other secret source.
 - `hitl:list` items carry `from`: who asked and how the request reached the inbox, worded for the reader.
 - Claude models through OpenRouter (`anthropic/…` ids) are prompt-cached with OpenRouter's automatic caching, honouring `cache` and `modelOptions.cacheTtl` (#648).
 
