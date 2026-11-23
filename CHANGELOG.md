@@ -10,6 +10,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ### Added
 
+- Plain Kubernetes manifests and a guide for running a venue on a cluster (`deploy/kubernetes`).
 - `hitl:list` items carry `from`: who asked and how the request reached the inbox, worded for the reader.
 - Claude models through OpenRouter (`anthropic/…` ids) are prompt-cached with OpenRouter's automatic caching, honouring `cache` and `modelOptions.cacheTtl` (#648).
 

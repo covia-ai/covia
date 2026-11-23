@@ -1,0 +1,153 @@
+# One Covia venue on Kubernetes: its config, one pod with a volume of its
+# own, a Service and an Ingress. Apply it into a namespace of its own:
+#
+#   kubectl create namespace venue-example
+#   kubectl apply -n venue-example -f venue.yaml
+#
+# Change the values marked CHANGE first. README.md explains each object.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: covia-venue-config
+  labels:
+    app.kubernetes.io/name: covia-venue
+data:
+  # The venue config (venue/docs/CONFIG.md). The pod reads it at start, so
+  # restart it after a change: kubectl rollout restart statefulset/covia-venue
+  config.json5: |
+    {
+      "operations": { "log-format": "json" },
+      "venues": [
+        {
+          "name": "Example Venue",                // CHANGE
+          "hostname": "venue.example.com",        // CHANGE: the public name, as in the Ingress
+          "port": 8080,
+          "store": "/data/venue.etch",
+          "trustedProxies": ["10.0.0.0/8"],       // CHANGE: the range the ingress controller connects from
+          "auth": { "public": { "enabled": false } },
+          "users": { "autoCreate": false },
+          "mcp": {},
+          "strictConfig": true
+        }
+      ]
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: covia-venue
+  labels:
+    app.kubernetes.io/name: covia-venue
+spec:
+  selector:
+    app.kubernetes.io/name: covia-venue
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# A StatefulSet, not a Deployment: the store has a single writer, and a
+# StatefulSet stops the old pod before it starts the new one.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: covia-venue
+  labels:
+    app.kubernetes.io/name: covia-venue
+spec:
+  serviceName: covia-venue
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: covia-venue
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: covia-venue
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: venue
+          image: ghcr.io/covia-ai/covia:stable   # CHANGE: pin a release, ghcr.io/covia-ai/covia:<x.y.z>
+          args: ["/config/config.json5"]
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          # Up to five minutes to start: collecting the store at start-up
+          # (etch.gc.onStart) takes longer on a large store.
+          startupProbe:
+            httpGet:
+              path: /api/v1/status
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /api/v1/status
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/v1/status
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: config
+              mountPath: /config
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: covia-venue-config
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: covia-venue
+  labels:
+    app.kubernetes.io/name: covia-venue
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt   # CHANGE: your certificate issuer, or remove
+spec:
+  tls:
+    - hosts: ["venue.example.com"]             # CHANGE
+      secretName: covia-venue-tls
+  rules:
+    - host: venue.example.com                  # CHANGE
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: covia-venue
+                port:
+                  name: http

@@ -72,6 +72,7 @@ Have a VM instance with a modern Linux distribution, such as Ubuntu 25, from any
 provider (an EC2 instance, an Azure VM or a DigitalOcean Droplet all work). To
 run the container image `ghcr.io/covia-ai/covia` instead, see the
 [GCP guide](gcp/README.md), whose `docker run` works on any host with Docker.
+To run a venue on a Kubernetes cluster, see [Venues on Kubernetes](kubernetes/README.md).
 
 ```
 sudo apt update
