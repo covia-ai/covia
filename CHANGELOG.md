@@ -10,6 +10,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [0.12.1] - 2026-11-23
 
+### Added
+
+- Claude models through OpenRouter (`anthropic/…` ids) are prompt-cached with OpenRouter's automatic caching, honouring `cache` and `modelOptions.cacheTtl` (#648).
+
 ### Fixed
 
 - `skill_load` reports only what a load newly makes discoverable: `revealed` no longer repeats skills an earlier load revealed, and `skillIndex` holds just their index lines instead of every discoverable skill, and is left out when nothing is new.

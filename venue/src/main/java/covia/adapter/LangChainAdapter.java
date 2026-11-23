@@ -875,12 +875,39 @@ public class LangChainAdapter extends AAdapter {
 		return switch (provider) {
 			case "ollama" -> buildOllamaModel(baseUrl, modelName, IO_TIMEOUT, tuning, new ModelHttpClientBuilder(engine, ctx, operatorUrl));
 			case "anthropic" -> buildAnthropicModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning, responseFormat, new ModelHttpClientBuilder(engine, ctx, operatorUrl));
+			// OpenRouter fronts many vendors; model ids are vendor-prefixed and
+			// openrouter/auto lets the router choose.
+			case "openrouter" -> buildOpenRouterModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning,
+				new ModelHttpClientBuilder(engine, ctx, operatorUrl));
 			// OpenAI, and the OpenAI-compatible APIs: Gemini's compatibility
-			// endpoint, xAI, DeepSeek, Mistral and OpenRouter (which fronts many
-			// vendors; model ids are vendor-prefixed and openrouter/auto lets
-			// the router choose).
-			default -> buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning, new ModelHttpClientBuilder(engine, ctx, operatorUrl));
+			// endpoint, xAI, DeepSeek and Mistral.
+			default -> buildOpenAiModel(apiKey, baseUrl, modelName, IO_TIMEOUT, tuning,
+				tuning.nativeOptions(), new ModelHttpClientBuilder(engine, ctx, operatorUrl));
 		};
+	}
+
+	/** OpenRouter's prefix on the ids of Anthropic's models. */
+	static final String OPENROUTER_ANTHROPIC = "anthropic/";
+
+	/**
+	 * The custom request fields of an OpenRouter call: the caller's
+	 * {@code providerOptions}, and for an Anthropic model while caching is on,
+	 * Anthropic's top-level automatic {@code cache_control}, which OpenRouter
+	 * passes on. Without it OpenRouter caches nothing for Claude; the
+	 * OpenAI-format client carries no per-message cache marks. A
+	 * {@code cache_control} the caller set is kept (#648).
+	 */
+	static Map<String, Object> openRouterParameters(String model, ModelTuning tuning) {
+		Map<String, Object> options = tuning.nativeOptions();
+		if (!tuning.caching() || model == null || !model.startsWith(OPENROUTER_ANTHROPIC)) return options;
+		Map<String, Object> out = (options != null) ? new LinkedHashMap<>(options) : new LinkedHashMap<>();
+		Map<String, Object> cacheControl = new LinkedHashMap<>();
+		cacheControl.put("type", "ephemeral");
+		if (!ModelCallOptions.DEFAULT.cacheTtl().equals(tuning.options().cacheTtl())) {
+			cacheControl.put("ttl", tuning.options().cacheTtl());
+		}
+		out.putIfAbsent("cache_control", cacheControl);
+		return out;
 	}
 
 	// Request/response logging is disabled by default — these flags would
@@ -910,12 +937,17 @@ public class LangChainAdapter extends AAdapter {
 	}
 
 	static ChatModel buildOpenAiModel(String apiKey, String baseUrl, String model, Duration timeout, ModelTuning tuning) {
-		return buildOpenAiModel(apiKey, baseUrl, model, timeout, tuning, null);
+		return buildOpenAiModel(apiKey, baseUrl, model, timeout, tuning, tuning.nativeOptions(), null);
 	}
 
-	private static ChatModel buildOpenAiModel(String apiKey, String baseUrl, String model, Duration timeout, ModelTuning tuning,
+	private static ChatModel buildOpenRouterModel(String apiKey, String baseUrl, String model, Duration timeout, ModelTuning tuning,
 			dev.langchain4j.http.client.HttpClientBuilder http) {
-		Map<String, Object> providerOptions = tuning.nativeOptions();
+		return buildOpenAiModel(apiKey, baseUrl, model, timeout, tuning, openRouterParameters(model, tuning), http);
+	}
+
+	/** @param providerOptions custom request fields, sent as they are */
+	private static ChatModel buildOpenAiModel(String apiKey, String baseUrl, String model, Duration timeout, ModelTuning tuning,
+			Map<String, Object> providerOptions, dev.langchain4j.http.client.HttpClientBuilder http) {
 		// strictJsonSchema(true) enables OpenAI structured outputs for the
 		// response_format path — server-enforced schema conformance on the
 		// assistant's text response. This is how typed agent outputs are
