@@ -65,7 +65,7 @@ path = Path("/home/ec2-user/covia-data/config.json")
 config = json.loads(path.read_text(encoding="utf-8"))
 config.setdefault("operations", {}).setdefault("log-format", "json")
 for venue in config.get("venues", []):
-    # venue-3 and venue-4 are dev venues, not production (security#53,
+    # venue-3 and venue-4 are QA venues, not production (security#53,
     # decision D3), so their status name gives their number and tier as
     # venue-1 and venue-2 do. Only the old default is replaced: a name set
     # by an operator is kept.

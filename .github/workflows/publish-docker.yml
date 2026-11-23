@@ -7,7 +7,7 @@ run-name: Publish Docker image [${{ github.event.workflow_run.head_branch }}]
 # and redeploys).
 #
 # Tags:
-#   :latest  — tracks qa (dev venues: venue-3, venue-4)
+#   :latest  — tracks qa (QA venues: venue-3, venue-4)
 #   :stable  — tracks master (stable venues: venue-1, venue-2)
 #   :<x.y.z> — release builds (master pushes whose POM version is not a
 #              SNAPSHOT, i.e. the "Release x.y.z" commit) — pin deployments here

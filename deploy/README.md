@@ -52,7 +52,7 @@ Release the history-aware SDK (1.24.1 or later) and update clients before deploy
 the venue's version-1 agent history format. Clients should use the SDK session
 transcript accessor, not read a frame's storage fields directly.
 
-The Azure and EC2 dev-venue deploy scripts take a one-time stopped-store backup
+The Azure and EC2 QA-venue deploy scripts take a one-time stopped-store backup
 under `/home/azureuser/covia-before-history-v1/data` or
 `/home/ec2-user/covia-before-history-v1/data` before starting the upgraded venue.
 The private backup includes the complete data directory and identity/encryption
@@ -141,7 +141,7 @@ curl -fLo covia.jar https://github.com/covia-ai/covia/releases/download/${COVIA_
 # Latest stable release
 curl -fLo covia.jar https://github.com/covia-ai/covia/releases/download/latest/covia.jar
 
-# Or the latest snapshot (the build the dev venues run)
+# Or the latest snapshot (the build the QA venues run)
 curl -fLo covia.jar https://github.com/covia-ai/covia/releases/download/latest-snapshot/covia.jar
 ```
 
