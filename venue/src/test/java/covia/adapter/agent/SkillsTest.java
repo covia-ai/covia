@@ -402,8 +402,8 @@ public class SkillsTest {
 			Maps.of(Fields.NAME, Strings.create("root")), Maps.empty());
 		AVector<ACell> declared = Vectors.of(
 			Strings.create("w/specialists"), Strings.create("w/specialists"));
-		assertEquals(declared,
-			RT.getIn(root.result(), Skills.K_SKILLSETS));
+		assertNull(RT.getIn(root.result(), Skills.K_SKILLSETS),
+			"the result names what the refs made loadable, not the refs");
 		assertTrue(RT.getIn(root.result(), "skillIndex").toString()
 			.contains("- reviewer — Review a result"), root.result().toString());
 		assertEquals(declared,

@@ -112,6 +112,99 @@ class ModelCallOptionsTest {
 		assertEquals(Labels.wrapSystem(Labels.BRACKET, "update"), RT.getIn(lastAfterAnswer, 3L, "content").toString());
 	}
 
+	/** A tool loop whose last step loaded a skill: the body and the tool notice end it. */
+	private static final String SKILL_LOAD_LOOP = """
+		[{"role":"system","content":"head"},{"role":"user","content":"question"},
+		 {"role":"assistant","content":"","toolCalls":[{"id":"c1","name":"skill_load","arguments":{}}]},
+		 {"role":"tool","id":"c1","name":"skill_load","content":"loaded"},
+		 {"role":"system","content":"skill body"},{"role":"system","content":"tool notice"}]
+		""";
+
+	/**
+	 * A mark on a late system message stays on it when it ends the request
+	 * where it was placed, for the provider call to carry (#726). A turn of
+	 * the caller's after it moves it later, so the mark falls back to the
+	 * message before it, never forward onto that turn.
+	 */
+	@Test
+	void aMarkOnALateSystemMessageStaysWhenItEndsTheRequestInPlace() {
+		AVector<ACell> loop = RT.ensureVector(JSON.parse(SKILL_LOAD_LOOP));
+		assertEquals(Set.of(1L, 5L),
+			LangChainAdapter.normaliseNativeSystemMessages(loop, Set.of(1L, 5L), Labels.BRACKET).cacheMarks());
+
+		AVector<ACell> withTurn = loop.conj(JSON.parse("{\"role\":\"user\",\"content\":\"task\"}"));
+		var placed = LangChainAdapter.normaliseNativeSystemMessages(withTurn, Set.of(5L), Labels.BRACKET);
+		assertEquals("task", RT.getIn(placed.messages(), 4L, "content").toString());
+		assertEquals("tool notice", RT.getIn(placed.messages(), 6L, "content").toString());
+		assertEquals(Set.of(3L), placed.cacheMarks());
+
+		// Not at the end: the mark goes to the message before the system messages
+		AVector<ACell> answered = loop.conj(JSON.parse("{\"role\":\"assistant\",\"content\":\"answer\"}"));
+		assertEquals(Set.of(3L),
+			LangChainAdapter.normaliseNativeSystemMessages(answered, Set.of(5L), Labels.BRACKET).cacheMarks());
+	}
+
+	/**
+	 * Anthropic takes no cache marker on an inline system message through
+	 * LangChain4j, so a request ending in a marked one uses the automatic
+	 * breakpoint, which lands on its last block, in place of that explicit
+	 * mark: the request still holds at most four breakpoints (#726).
+	 */
+	@Test
+	void aRequestEndingInAMarkedSystemMessageCachesItAutomatically() throws Exception {
+		AtomicReference<ACell> request = new AtomicReference<>();
+		HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/v1/messages", exchange -> {
+			request.set(JSON.parse(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8)));
+			byte[] response = """
+				{"id":"msg","type":"message","role":"assistant","model":"claude-sonnet-5-5",
+				 "content":[{"type":"text","text":"done"}],"stop_reason":"end_turn",
+				 "usage":{"input_tokens":10,"output_tokens":2}}
+				""".getBytes(StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().set("content-type", "application/json");
+			exchange.sendResponseHeaders(200, response.length);
+			try (var out = exchange.getResponseBody()) { out.write(response); }
+		});
+		server.start();
+		try {
+			String url = "http://127.0.0.1:" + server.getAddress().getPort() + "/v1/";
+			ACell input = JSON.parse("""
+				{"maxTokens":1024,"modelOptions":{"cacheTtl":"5m","nativeSystemMessages":true}}
+				""");
+			var tuning = LangChainAdapter.extractTuning(input);
+			var model = LangChainAdapter.buildAnthropicModel("key", url, "claude-sonnet-5-5", Duration.ofSeconds(5), tuning);
+			AVector<ACell> tools = RT.ensureVector(JSON.parse("[{\"name\":\"lookup\",\"description\":\"Look up data\"}]"));
+			AVector<ACell> loop = RT.ensureVector(JSON.parse(SKILL_LOAD_LOOP));
+
+			var ending = LangChainAdapter.normaliseNativeSystemMessages(loop, Set.of(1L, 5L), Labels.BRACKET);
+			LangChainAdapter.callModel("anthropic", "claude-sonnet-5-5", model, ending.messages(), tools, null,
+				ending.cacheMarks());
+			ACell wire = request.get();
+			assertEquals("ephemeral", RT.getIn(wire, "cache_control", "type").toString(), wire.toString());
+			assertNotNull(RT.getIn(wire, "messages", 0L, "content", 0L, "cache_control"), "the conversation start keeps its mark");
+			assertNull(RT.getIn(wire, "messages", 2L, "content", 0L, "cache_control"),
+				"the tool result is not marked in place of the skill body");
+			assertEquals("system", RT.getIn(wire, "messages", 4L, "role").toString());
+			assertEquals(4, breakpoints(wire), wire.toString());
+
+			// A request ending in a marked turn of the conversation keeps explicit marks only
+			AVector<ACell> toResult = loop.subVector(0, 4);
+			LangChainAdapter.callModel("anthropic", "claude-sonnet-5-5", model, toResult, tools, null, Set.of(1L, 3L));
+			assertNull(RT.getIn(request.get(), "cache_control"), request.get().toString());
+			assertNotNull(RT.getIn(request.get(), "messages", 2L, "content", 0L, "cache_control"));
+		} finally {
+			server.stop(0);
+		}
+	}
+
+	/** Cache breakpoints in a request as sent: every {@code cache_control} field. */
+	private static int breakpoints(ACell wire) {
+		String json = JSON.print(wire).toString();
+		int count = 0;
+		for (int i = json.indexOf("\"cache_control\""); i >= 0; i = json.indexOf("\"cache_control\"", i + 1)) count++;
+		return count;
+	}
+
 	/** A turn after a reply that said nothing: that reply is never sent, so the
 	 *  instructions placed before it must land where the API takes a system message. */
 	@Test

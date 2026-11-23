@@ -402,6 +402,15 @@ boundaries; enabling it suppresses the explicit conversation marks to avoid
 exceeding the provider's four-breakpoint limit. One-hour caching may change
 provider charges.
 
+LangChain4j gives a system message sent inline no `cache_control`, so the
+explicit marks reach system messages this way: a request that ends in a marked
+system message, such as a loaded skill's body after its `skill_load` result,
+carries that mark with the provider's automatic breakpoint, which lands on the
+request's last block, in place of an explicit one; a marked system message
+elsewhere passes its mark to the message before it. A request therefore holds
+no more breakpoints than it has marks. In the portable form a system message
+travels inside a user message, which takes the mark itself.
+
 For example, an agent can set:
 
 ```json
