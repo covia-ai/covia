@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -27,6 +28,8 @@ import covia.api.Fields;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.venue.Agent;
+import covia.venue.AgentEvents;
+import covia.venue.AgentWatch;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.test.Rendezvous;
@@ -468,6 +471,45 @@ public class AgentConcurrencyTest {
 
 		assertEquals(Agent.SLEEPING, awaitFinished(agent));
 		assertFalse(agent.sessions().hasPending(), "All messages should be processed");
+	}
+
+	/**
+	 * A trigger that lands as a run ends, after its last cycle and before the
+	 * run lets go of the agent, runs a cycle of its own: its wake is on the
+	 * agent, where the run's exit re-check finds it. The run is held inside its
+	 * {@code run:end} event, which its listeners receive on the run's thread,
+	 * while the trigger lands.
+	 */
+	@Test
+	public void testATriggerAsARunEndsRunsItsCycle() throws Exception {
+		RequestContext ctx = RequestContext.of(ALICE_DID);
+		engine.jobs().invokeOperation("v/ops/agent/create",
+			Maps.of(Fields.AGENT_ID, "late-trigger", Fields.CONFIG, Maps.of(Fields.OPERATION, "v/test/ops/echo")),
+			ctx).awaitResult(5000);
+		Agent agent = engine.getVenueState().users().user(ALICE_DID).agent("late-trigger");
+		AMap<AString, ACell> trigger = Maps.of(Fields.AGENT_ID, "late-trigger", Fields.WAIT, CVMBool.FALSE);
+
+		CountDownLatch ending = new CountDownLatch(1);
+		CountDownLatch triggered = new CountDownLatch(1);
+		AtomicBoolean first = new AtomicBoolean(true);
+		try (AgentWatch watch = AgentWatch.open(engine, ALICE_DID, "late-trigger");
+				AgentEvents.Subscription hold = engine.agentEvents().subscribe(ALICE_DID, agent.getAgentId(), e -> {
+					if (AgentEvents.RUN_END.equals(e.type()) && first.compareAndSet(true, false)) {
+						ending.countDown();
+						try {
+							triggered.await(10, TimeUnit.SECONDS);
+						} catch (InterruptedException interrupted) {
+							Thread.currentThread().interrupt();
+						}
+					}
+				})) {
+			engine.jobs().invokeOperation("v/ops/agent/trigger", trigger, ctx).awaitResult(5000);
+			assertTrue(ending.await(10, TimeUnit.SECONDS), "the first run should reach its end");
+			engine.jobs().invokeOperation("v/ops/agent/trigger", trigger, ctx).awaitResult(5000);
+			triggered.countDown();
+			watch.awaitRest(2);
+		}
+		assertEquals(2, agent.getTimeline().count(), "each trigger ran a cycle");
 	}
 
 	@Test

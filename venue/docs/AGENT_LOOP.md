@@ -102,6 +102,7 @@ The agent's value is a plain map. Every write replaces the entire map atomically
 | `error` | string? | Last error message, or null. Set when the transition function fails. |
 | `suspension` | map? | Deliberate stop: `{by: <actual caller DID>, reason?: <up to 512 characters>, ts: <epoch millis>}`. Set by `agent:suspend`, separate from faults; cleared on resume. |
 | `inCycle` | map? | The running cycle's claim, `{epoch, sessionId?}` (§2.5.1). Present only while a cycle runs. |
+| `wakeTime` | long? | The agent's own wake, written by a forced `agent:trigger`: when it fell due. The next cycle to begin takes it (§4.6); absent when none is pending. |
 
 All fields are framework-managed except `state`, which is owned by the transition
 function. CAD3 structural sharing means the timeline (which only appends) shares
@@ -1037,15 +1038,22 @@ await that Job. Use trigger only when the normal intake path isn't enough
 session: a supplied `sessionId` is resolved and echoed back, and without one
 the trigger runs unsessioned.
 
-`force` (default `true`) runs a cycle even when the agent has no work, so an
-agent may act proactively on a trigger. The forced cycle takes a ready task if
-there is one, and never a parked one (§4.6). `force: false` runs a cycle only
-when there is work, and an idle agent with none returns its status rather than
-failing; the scheduler's wake events pass `false`.
+`force` (default `true`) records a wake on the agent (`wakeTime`, §4.6)
+before waking it, so a cycle runs for the trigger even when the agent has no
+other work, and an agent may act proactively on a trigger. The next cycle to
+begin takes the wake, whatever it picks: a ready task if there is one, never a
+parked one (§4.6). A trigger that arrives while a cycle runs therefore gets the
+cycle after it, as a message does, except the agent's own trigger from its
+cycle, which records no wake and asks for no further cycle. `force: false`
+records nothing and runs a cycle only when there is work, and an idle agent
+with none returns its status rather than failing; the scheduler's wake events
+pass `false`.
 
 The `wait` parameter on trigger is a block on the loop's completion
 future, not a result-await. `true` or absent blocks until the loop drains
-all outstanding work and exits to SLEEPING, `false` returns at once, and a
+all outstanding work, the trigger's wake included, and exits to SLEEPING:
+a trigger that joined a run already past its last cycle waits for the run
+that takes its wake. `false` returns at once, and a
 number of milliseconds is a bounded block. A transition that awaits an ordinary
 async op (LLM or HTTP) simply keeps its virtual thread blocked on `.join()` —
 there is no yield/resume handoff. Sessioned HITL requests return their durable
@@ -1079,8 +1087,8 @@ run's `finally` block.
 **Sequence (per iteration):**
 
 1. Read the current agent record: `sessions`, `tasks`, `pending`, `state`.
-2. If not the first iteration and nothing to process (no tasks and no
-   session with pending messages and no scheduled wake due): break out
+2. If not the first iteration and nothing to process (no ready task, no
+   session with pending messages and no agent wake due, §4.6): break out
    of the loop. Pending jobs are passed through but do not alone
    trigger a run.
 3. Pick the oldest work in the agent's queue: the oldest ready task, in its
@@ -1091,6 +1099,8 @@ run's `finally` block.
 4. **Take the cycle's input**, in one transaction on the agent record:
    - Issue the cycle's claim (§2.5.1). An agent that is SUSPENDED or
      TERMINATED is issued none: take nothing and go back to step 1.
+   - Take the agent's own wake if it has fallen due (§4.6), whatever the
+     cycle picked.
    - Mark the task's next input shown: its original input, then each
      continuation once. If a continuation arrived since the pick, take
      nothing and go back to step 1.
@@ -1251,8 +1261,8 @@ exit re-check. The logic (atomic CAS on `runningLoops: ConcurrentHashMap` via
    - Otherwise → read the stable agent status from the lattice.
    - A stale persisted `RUNNING` is allowed through defensively; normal startup
      has already cleared it.
-   - Unless `force`, if there is no work (no session with pending messages
-     and no ready task) → return null (leave slot empty).
+   - Unless `force`, if there is no work (no session with pending messages,
+     no ready task and no agent wake due) → return null (leave slot empty).
    - Resolve `config.operation` → if null, return null.
    - Create a fresh `CompletableFuture<ACell>` and atomically put it in the slot.
    - Persist `RUNNING`, then launch `executeRunLoop` on a
@@ -1266,6 +1276,11 @@ An agent is eligible to run when any of:
   `agent:chat`, or a HITL answer or the outcome of a tool call that passed its
   time limit when no queued task waits for it)
 - A task is ready (below)
+- The agent's own wake has fallen due: a forced `agent:trigger` records one at
+  the agent record's `wakeTime`, due when written, and the next cycle to begin
+  takes it in the transaction that takes its input (§4.4 step 4). Wakes
+  recorded before a cycle begins are taken together. The agent's own trigger
+  from its cycle records none.
 
 **Task readiness and parking.** A task is ready unless it is parked. A parked
 task is ready again once something new is there for it: an input it has not
@@ -1302,19 +1317,23 @@ with `AgentAdapter.TASK_YIELDED_IDLE`. Claiming a task for a cycle clears
 `parked`, so a task that is not parked but has been shown its input was
 interrupted mid-cycle, and runs again (§6.1).
 
-**No lost wakeups.** `addTaskInSession` / `appendSessionPending` write to the lattice
-atomically, then call `wakeAgent`. The loop's top-of-iteration `hasWork` check
+**No lost wakeups.** Every wake writes to the lattice atomically, then calls
+`wakeAgent`: `addTaskInSession` / `appendSessionPending` for work, `Agent.wake`
+for a forced trigger. The loop's top-of-iteration `hasWork` check
 reads the current lattice. If work landed while a loop was running, the next
 iteration sees it. If work landed while the loop removed its slot, the
 `finally`-block double-check (§4.4) re-launches; failing that,
-the next `wakeAgent` from the writer finds the slot empty and launches.
+the next `wakeAgent` from the writer finds the slot empty and launches. A
+wake that joins a loop already past its last cycle is therefore never lost:
+it is on the lattice, where the double-check finds it.
 
 **No double runs.** `ConcurrentHashMap.compute()` serialises the
 empty-slot → launch transition. Only one thread can populate the slot; all
 others observe it populated and return the existing completion.
 
-**Scheduled wakes.** Wake times are kept per session and per task, not per
-agent, so a sleep on one session never delays another. A session or task
+**Scheduled wakes.** Scheduled wake times are kept per session and per task,
+so a sleep on one session never delays another; the agent record's own
+`wakeTime` holds only a trigger's wake, due when it is written. A session or task
 record may carry `wakeTime` (absolute millis): "this thread wants to wake at
 T". Only the framework writes it, never the `n/`, `c/` or `t/` scratch
 namespaces. On merge, `mergeAndPostProcess` installs the `wakeTime` a

@@ -888,9 +888,12 @@ public class AgentAdapter extends AAdapter {
 	private ACell doKick(RequestContext ctx, ACell input) {
 		AgentTarget target = resolveAgentTarget(ctx, input, Fields.AGENT_ID,
 			Abilities.AGENT_REQUEST, false);
-		requireNative(engine.getAgent(target.ownerDID(), target.agentId()), "trigger");
-		wakeAgent(target.ownerDID(), target.agentId(), parseForce(input));
 		Agent agent = engine.getAgent(target.ownerDID(), target.agentId());
+		requireNative(agent, "trigger");
+		boolean force = parseForce(input);
+		if (force && agent != null) recordTriggerWake(target, agent, ctx);
+		wakeAgent(target.ownerDID(), target.agentId(), force);
+		agent = engine.getAgent(target.ownerDID(), target.agentId());
 		return identify(target, Maps.of(
 			Fields.STATUS, observableStatus(target.ownerDID(), target.agentId(), agent)));
 	}
@@ -2236,6 +2239,7 @@ public class AgentAdapter extends AAdapter {
 		}
 
 		boolean force = parseForce(input);
+		if (force) recordTriggerWake(target, agent, ctx);
 		CompletableFuture<ACell> completion = wakeAgent(target.ownerDID(), agentId, force);
 		if (completion == null) {
 			// force=true (the default) keeps the historical "must start" contract.
@@ -2272,6 +2276,7 @@ public class AgentAdapter extends AAdapter {
 			Fields.STATUS, Agent.RUNNING));
 		if (sid != null) running = running.assoc(Fields.SESSION_ID, sid);
 		final Blob session = sid;
+		if (waitMs != 0) completion = untilWakeTaken(target.ownerDID(), agentId, completion);
 		awaitRunCompletion(job, completion, waitMs, running,
 			result -> (session != null) ? annotateWithSession(result, session) : result);
 	}
@@ -4122,8 +4127,10 @@ public class AgentAdapter extends AAdapter {
 	}
 
 	/**
-	 * Wakes the agent: persists the wake flag and launches a fresh run loop
-	 * if none is currently running. Returns the live loop's completion
+	 * Wakes the agent: launches a fresh run loop if none is currently running.
+	 * What the loop runs for is already on the lattice, written before this
+	 * call: a message, a task, or a trigger's wake ({@link Agent#wake}).
+	 * Returns the live loop's completion
 	 * future, or null if the agent doesn't exist / has no work and wake
 	 * isn't forced.
 	 *
@@ -4478,10 +4485,41 @@ public class AgentAdapter extends AAdapter {
 		return wakeAgent(ownerDID, agentId, false);
 	}
 
-	/** Work is a session message waiting, or a task with something to run on
-	 *  ({@link Agent#isTaskReady}); a parked task is not work. */
+	/** Work is a session message waiting, a task with something to run on
+	 *  ({@link Agent#isTaskReady}), or the agent's own wake fallen due
+	 *  ({@link Agent#wake}); a parked task is not work. */
 	private boolean hasWork(Agent agent) {
-		return agent.sessions().hasPending() || agent.hasReadyTask(engine.currentTimestamp().longValue());
+		long now = engine.currentTimestamp().longValue();
+		return agent.sessions().hasPending() || agent.hasReadyTask(now) || agent.hasDueWake(now);
+	}
+
+	/**
+	 * Records a forced trigger's wake on the agent, so that the next cycle to
+	 * begin runs for it however the trigger and the run loop interleave, as a
+	 * message's write does for the message (AGENT_LOOP.md §4.6). An agent
+	 * triggering itself from its own cycle asks for no further cycle.
+	 */
+	private void recordTriggerWake(AgentTarget target, Agent agent, RequestContext ctx) {
+		if (isOwnLiveLoop(target.ownerDID(), target.agentId(), ctx.getAuthorityDID())) return;
+		agent.wake();
+	}
+
+	/**
+	 * The run that takes the agent's due wake: {@code run}, or, when that run
+	 * ends with the wake still pending (a trigger that joined a run already
+	 * past its last cycle), the run its exit re-check or this call starts.
+	 */
+	private CompletableFuture<ACell> untilWakeTaken(AString ownerDID, AString agentId,
+			CompletableFuture<ACell> run) {
+		return run.thenCompose(result -> {
+			Agent agent = engine.getAgent(ownerDID, agentId);
+			if (agent == null || !agent.hasDueWake(engine.currentTimestamp().longValue())) {
+				return CompletableFuture.completedFuture(result);
+			}
+			CompletableFuture<ACell> next = wakeAgent(ownerDID, agentId, false);
+			return (next == null) ? CompletableFuture.completedFuture(result)
+				: untilWakeTaken(ownerDID, agentId, next);
+		});
 	}
 
 	// ========== Run loop ==========

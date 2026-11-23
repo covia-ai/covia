@@ -408,8 +408,9 @@ and how the run loop treats a fire, are in [AGENT_LOOP.md §4.6](./AGENT_LOOP.md
   owner calling `agent:trigger` would (§5).
 - When it fires, `agent:trigger` (a transient Job, so no session is minted and
   no durable Job is recorded) calls `wakeAgent(force:false)`. The run
-  loop runs iff there is work (a session message, or a ready task, which includes a
-  parked task whose `wakeTime` has come: AGENT_LOOP.md §4.6); it processes what's
+  loop runs iff there is work (a session message, a ready task, which includes a
+  parked task whose `wakeTime` has come, or the agent's own wake from a trigger:
+  AGENT_LOOP.md §4.6); it processes what's
   due, and the post-cycle `setThreadWakeTime` schedules the next earliest or
   clears `wakeHandle` if none remain.
 - On boot, `Engine.rebuildSchedulerFromLattice` calls `Scheduler.rescheduleAgentWake` per agent,

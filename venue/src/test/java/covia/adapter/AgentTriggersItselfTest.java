@@ -25,6 +25,7 @@ import covia.grid.Job;
 import covia.grid.Principals;
 import covia.grid.Status;
 import covia.venue.Agent;
+import covia.venue.AgentWatch;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestEngine;
@@ -151,10 +152,12 @@ public class AgentTriggersItselfTest {
 
 	/**
 	 * The agent's own {@code agent:trigger} from its cycle returns at once, while
-	 * its owner's trigger, by default, still waits for the cycle.
+	 * its owner's trigger, by default, still waits for the held cycle and the
+	 * cycle it asked for.
 	 */
 	@Test
 	public void triggeringItselfReturnsAtOnceWhileOthersWait() throws Exception {
+		Agent agent = engine.getVenueState().users().user(owner).agent(agentId);
 		try (TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
 			Job held = holdCycle(gate);
 			CompletableFuture<ACell> ownerTrigger = call(
@@ -167,7 +170,48 @@ public class AgentTriggersItselfTest {
 			gate.release();
 			held.awaitResult(10_000);
 			ownerTrigger.get(10, TimeUnit.SECONDS);
+			assertEquals(2, agent.getTimeline().count(), "the owner's trigger returned after its own cycle");
 		}
+	}
+
+	/**
+	 * Another caller's trigger during the cycle asks for a cycle after it: the
+	 * running cycle took its input before the trigger, so the next one runs for
+	 * it, as for a message that arrives during a cycle.
+	 */
+	@Test
+	public void anotherCallersTriggerDuringTheCycleRunsTheNextCycle() throws Exception {
+		Agent agent = engine.getVenueState().users().user(owner).agent(agentId);
+		try (AgentWatch watch = AgentWatch.open(engine, owner, agentId);
+				TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			Job held = holdCycle(gate);
+			ACell triggered = call("v/ops/agent/trigger",
+				Maps.of(Fields.AGENT_ID, agentId, Fields.WAIT, CVMBool.FALSE), ownerCtx)
+				.get(PROMPT_MS, TimeUnit.MILLISECONDS);
+			assertEquals(Agent.RUNNING, RT.getIn(triggered, Fields.STATUS));
+
+			gate.release();
+			held.awaitResult(10_000);
+			watch.awaitRest(2);
+		}
+		assertEquals(2, agent.getTimeline().count(), "the trigger ran a cycle after the held one");
+	}
+
+	/** The agent's own trigger from its cycle asks for no further cycle. */
+	@Test
+	public void triggeringItselfAsksForNoFurtherCycle() throws Exception {
+		Agent agent = engine.getVenueState().users().user(owner).agent(agentId);
+		try (AgentWatch watch = AgentWatch.open(engine, owner, agentId);
+				TestAdapter.TestGate gate = TestAdapter.createGate(gateName)) {
+			Job held = holdCycle(gate);
+			asAgent("v/ops/agent/trigger", Maps.of(Fields.AGENT_ID, agentId));
+
+			gate.release();
+			held.awaitResult(10_000);
+			watch.awaitRest(1);
+		}
+		assertEquals(1, agent.getTimeline().count());
+		assertFalse(agent.hasDueWake(Long.MAX_VALUE), "no wake waits for the agent");
 	}
 
 	/** A scheduled {@code agent:trigger} of itself, triggered from its cycle, returns at once too. */
