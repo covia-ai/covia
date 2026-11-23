@@ -136,6 +136,10 @@ metadata:
     app.kubernetes.io/name: covia-venue
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt   # CHANGE: your certificate issuer, or remove
+    # For Contour: redirect plain HTTP to HTTPS, and let responses and event
+    # streams last. Other controllers ignore these; README.md says why they matter.
+    ingress.kubernetes.io/force-ssl-redirect: "true"
+    projectcontour.io/response-timeout: infinity
 spec:
   tls:
     - hosts: ["venue.example.com"]             # CHANGE

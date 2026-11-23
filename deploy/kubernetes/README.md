@@ -13,8 +13,9 @@ public image `ghcr.io/covia-ai/covia`. It is plain YAML: apply it with
 
 ## What the cluster needs
 
-- An ingress controller. The Ingress uses the cluster's default IngressClass;
-  set `spec.ingressClassName` to use another.
+- An ingress controller. The Ingress names no class, so the cluster's default
+  IngressClass serves it, or a controller that takes Ingresses without one,
+  as Contour does; set `spec.ingressClassName` to choose another.
 - A default StorageClass, which the volume is claimed from.
 - A DNS name for the venue pointing at the ingress controller.
 - A certificate for that name: the Ingress asks
@@ -70,16 +71,22 @@ curl https://venue.example.com/api/v1/status
   anonymous access off. The startup probe allows five minutes, for a store
   collected at start-up (`etch.gc.onStart`).
 
-## Long-lived responses
+## What the ingress controller must allow
 
-Job and agent event streams (`/sse`) and MCP sessions can go quiet for long
-spells. Ingress controllers close a response that sends nothing for a while,
-ingress-nginx after 60 seconds by default. Raise the read timeout on the
-Ingress, for ingress-nginx with:
+Two settings of the ingress controller decide whether a venue works through
+it, and each controller has its own way to set them. `venue.yaml` carries
+Contour's; for another controller, find its equivalents.
 
-```yaml
-nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-```
+- **HTTPS only.** A controller may serve plain HTTP as well as HTTPS for an
+  Ingress with TLS, and callers then send bearer tokens unencrypted. Contour
+  does so unless the Ingress carries
+  `ingress.kubernetes.io/force-ssl-redirect: "true"`, which redirects plain
+  HTTP to HTTPS.
+- **Long responses.** An `invoke` that waits for its result sends nothing
+  until the result is ready, and job and agent event streams (`/sse`) and MCP
+  sessions stay open, often quiet, for as long as the work lasts. Contour ends
+  every response after 15 seconds unless the Ingress carries
+  `projectcontour.io/response-timeout: infinity`.
 
 ## Changing and upgrading a venue
 
