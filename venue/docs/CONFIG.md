@@ -2168,7 +2168,8 @@ take `{"thinking":{"type":"adaptive"},"output_config":{"effort":"low"}}`.
 `1h`), `automaticCaching`, and `thinkingPrefixMismatch` (`provider`, `error`,
 `drop`) through LangChain4j. Current Claude presets use native system messages,
 five-minute explicit caching, and dropping thinking whose signed prefix no
-longer matches. `cache:false` disables all caching. Compaction, inline tool
+longer matches. Claude models through OpenRouter are cached with OpenRouter's
+automatic caching. `cache:false` disables all caching. Compaction, inline tool
 changes and full cross-turn thinking preservation remain disabled pending
 upstream support. See [MODELS.md §5.3](MODELS.md#53-inference-options-and-upstream-support)
 for defaults and the upstream audit. These are presets and call parameters;
