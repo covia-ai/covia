@@ -61,7 +61,9 @@ curl https://venue.example.com/api/v1/status
   key, `/data/venue.key`, which the venue creates on its first start. The
   store's state belongs to that key, and the venue refuses to start on it with
   another ([CONFIG.md, Venue identity](../../venue/docs/CONFIG.md#venue-identity)).
-  Back up the volume as a whole, while the venue is stopped.
+  Back up the volume as a whole, while the venue is stopped: scale the
+  StatefulSet to 0 replicas, copy or snapshot the volume, and scale it back
+  to 1.
 - The image runs as user 1001; `fsGroup` makes the volume writable for it.
 - The heap is 75% of the memory limit, set by the image's `JAVA_OPTS`.
 - The probes call `/api/v1/status`, which answers anyone, so they work with
@@ -83,10 +85,14 @@ nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
 
 - A config change takes effect when the pod restarts:
   `kubectl -n venue-example rollout restart statefulset/covia-venue`.
-- To upgrade, change `image` and apply the file again; the StatefulSet
-  replaces the pod. Read the [operator guide](../README.md) for upgrade notes
-  first, and back up the volume before an upgrade that changes a store
-  format. To roll back, apply the previous image.
+- To upgrade, back up the volume, change `image` and apply the file again;
+  the StatefulSet replaces the pod. Read the [operator guide](../README.md)
+  for upgrade notes first.
+- A newer version may upgrade the store, and migration only goes forward: an
+  older version refuses a store a newer one has upgraded, and writes nothing
+  to it ([MIGRATE.md](../../venue/docs/MIGRATE.md)). To roll back, restore
+  the backup taken before the upgrade, with the venue stopped, and apply the
+  previous image.
 - The venue's own `venue:restart` operation restarts the jar inside the
   container, not the image; on Kubernetes, change the image instead.
 
