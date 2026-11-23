@@ -65,6 +65,10 @@ curl https://venue.example.com/api/v1/status
   Back up the volume as a whole, while the venue is stopped: scale the
   StatefulSet to 0 replicas, copy or snapshot the volume, and scale it back
   to 1.
+- Deleting the StatefulSet keeps the volume. Deleting its claim,
+  `data-covia-venue-0`, or the venue's namespace removes the volume too, with
+  the store and identity key on it, wherever the StorageClass's reclaim policy
+  is `Delete`, the Kubernetes default.
 - The image runs as user 1001; `fsGroup` makes the volume writable for it.
 - The heap is 75% of the memory limit, set by the image's `JAVA_OPTS`.
 - The probes call `/api/v1/status`, which answers anyone, so they work with
