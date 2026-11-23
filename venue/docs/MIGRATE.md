@@ -13,7 +13,7 @@ calls an embedder makes in [EMBEDDING.md](EMBEDDING.md).
 - Migration supports stores written by a release. A store a snapshot took
   to a version still receives a later change to that version's schema, as a
   new step (below), so an embedder that runs a snapshot can upgrade; nothing
-  else of a snapshot's is supported. The dev venues, which CI deploys from
+  else of a snapshot's is supported. The QA venues, which CI deploys from
   `qa` ([AGENTS.md](../../AGENTS.md#branches-and-deploys)), are wiped and
   refreshed instead (#670, not built).
 - A build refuses stored state newer than it supports, Covia's or an

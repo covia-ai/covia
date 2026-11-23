@@ -5,19 +5,19 @@ Live venue server instances available for development, testing, and agent use.
 Two tiers:
 
 - **Stable** — `venue-1`, `venue-2` (plus `venue-test` for scratch use): run the `:stable` image, deployed automatically on push to `master` (i.e. at releases). Use these for demos, integrations, and anything long-lived.
-- **Dev** — `venue-3`, `venue-4`: run the `:latest` image, deployed automatically on every push to `qa`, which follows `develop`. Use these to exercise unreleased features.
+- **QA** — `venue-3`, `venue-4`: run the `:latest` image, deployed automatically on every push to `qa`, which follows `develop`. Use these to exercise unreleased features.
 
 | Venue | Tier | Fresh authenticated DID |
 |---|---|---|
 | `venue-1.covia.ai` | Stable | Requires operator provisioning with `user:create` |
 | `venue-2.covia.ai` | Stable | Requires operator provisioning with `user:create` |
 | `venue-test.covia.ai` | Stable scratch | Registered on first authenticated use |
-| `venue-3.covia.ai` | Dev | Operator-configured; do not assume first-use registration |
-| `venue-4.covia.ai` | Dev | Registered on first authenticated use |
+| `venue-3.covia.ai` | QA | Operator-configured; do not assume first-use registration |
+| `venue-4.covia.ai` | QA | Registered on first authenticated use |
 
 Anonymous access and authenticated-user admission are separate policies. Use
 `venue-1` or `venue-2` for anonymous stable reads; use `venue-test` for a
-fresh-key authenticated experiment without prior provisioning. Dev-venue
+fresh-key authenticated experiment without prior provisioning. QA-venue
 policy may change with its operator configuration.
 
 ## Stable Venues
@@ -51,7 +51,7 @@ All three stable-tier venues run in a **single JVM** on one GCP host (multi-venu
 
 The trio gives a stable federation set for cross-venue work on one host (`35.213.147.8`).
 
-## Dev Venues
+## QA Venues
 
 ### venue-3.covia.ai (AWS)
 

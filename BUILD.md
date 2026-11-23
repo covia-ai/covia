@@ -161,7 +161,7 @@ contents, provenance, candidate-jar checks and generation instructions.
 | Branch/event | Validation | Publication and deployment |
 |--------------|------------|----------------------------|
 | `develop` pushes and PRs | Default tests, Java 21 fallback | None; direct pushes allowed |
-| `qa` pushes | Default, integration and durability tests, Java 21 fallback | `latest-snapshot`, Docker `:latest`, dev venues 3 and 4 |
+| `qa` pushes | Default, integration and durability tests, Java 21 fallback | `latest-snapshot`, Docker `:latest`, QA venues 3 and 4 |
 | PRs into `master` | Same as QA | None |
 | `master` pushes | Same as QA | Docker `:stable` (plus version tags for non-SNAPSHOT builds), stable venues test/1/2 |
 | Release tags | Default, integration and durability tests | Versioned GitHub release and `latest` |
@@ -176,7 +176,7 @@ git push origin develop:qa
 ```
 
 QA checks that its commit belongs to published develop. Accept a candidate after
-tests, both dev-venue deploys and relevant manual/API checks pass. Review skipped
+tests, both QA-venue deploys and relevant manual/API checks pass. Review skipped
 external-service tests and record the accepted SHA and publishing run. The release
 operator verifies acceptance; it is not an automated master merge prerequisite.
 
@@ -211,7 +211,7 @@ Remaining rollout from the 2026-11-12 audit:
 - [ ] Apply the QA safeguards and add the Java 21 check on master. QA was
   unprotected; master required only `build-and-test`, with admin bypass.
 - [ ] Publish the workflow changes to develop and verify a full QA promotion:
-  Test → snapshot/Docker publication → both dev-venue deployments.
+  Test → snapshot/Docker publication → both QA-venue deployments.
 
 ### Stable Releases
 

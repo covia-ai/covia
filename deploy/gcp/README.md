@@ -16,7 +16,7 @@ the default closed admission policy and require explicit provisioning.
 
 The container runs the image digest recorded by `publish-docker.yml`
 after successful master validation (also tagged `:stable`), and is redeployed automatically by
-`deploy-gcp.yml`. The dev venues (`venue-3`, `venue-4`) track `qa` via the
+`deploy-gcp.yml`. The QA venues (`venue-3`, `venue-4`) track `qa` via the
 `:latest` image; this host only changes at releases.
 
 ## Host Layout
