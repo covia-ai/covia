@@ -19,6 +19,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - A request the venue's own code makes for a principal reads as that principal directly rather than as a sign-in.
 - The owner's messages carry the `[From …]` hint only when where they come from changes, so a conversation over one HTTP login or access token is labelled once; every other source is still labelled on every message.
 - Refusals of an unknown setting or input field in the Convex, P2P, preferences, Python, Discord, Slack and WhatsApp adapters name the one most likely meant, when one is close.
+- An agent calling a tool name it cannot call gets one hint: the skill to load when an advertised skill binds that name, otherwise the callable tool it most likely misspelt, typing slips now included as well as case and separators.
 
 ### Fixed
 

@@ -314,27 +314,40 @@ public class AgentToolboxTest {
 	}
 
 	/**
-	 * A name the session cannot call is answered with what would make it
-	 * callable, and nothing runs (#643): the regression was a skill tool called
-	 * before its skill was loaded falling through to grid dispatch.
+	 * A name the session cannot call is answered with the one hint most likely
+	 * to make it callable, and nothing runs (#643): the regression was a skill
+	 * tool called before its skill was loaded falling through to grid dispatch.
 	 */
 	@Test
 	public void unboundToolNamesAreAnsweredWithoutRunning() {
+		// A skill tool, agent_compact_session, whose name contains the callable
+		// compact: loading the skill is the fix, not compact
+		write(SKILLSET + "/gamma", Maps.of(
+			"description", "Toolbox session skill",
+			"content", Maps.of("inline", "TOOLBOX_SESSION_SKILL_BODY"),
+			"skill", Maps.of("tools", Vectors.of(Strings.create("v/ops/agent/compact-session")))));
 		for (AgentRuntime runtime : RUNTIMES) {
 			RunningAgent agent = start(runtime, runtime.name() + "-unbound", sharedConfig(runtime));
 			String where = runtime.name();
 			AMap<AString, ACell> step = step(agent, "call tools by name",
 				Maps.of("toolCalls", Vectors.of(
 					invoke("call_unloaded", "covia_read", Maps.of("path", CONTEXT_PATH)),
+					invoke("call_unloaded_near", "agent_compact_session", Maps.empty()),
 					invoke("call_near_miss", "test-echo", Maps.of("ok", true)),
+					invoke("call_misspelt", "test_ecoh", Maps.of("ok", true)),
 					invoke("call_unknown", "records_read", Maps.empty()),
 					invoke("call_harness", HarnessTools.CONTEXT_LOAD, Maps.of("path", CONTEXT_PATH)),
 					invoke("call_reference", "v/test/ops/echo", Maps.of("ok", true)))), null);
 
 			assertEquals(Strings.create("Error: " + String.format(HarnessTools.TOOL_NOT_LOADED,
 				"covia_read", "[alpha, beta]")), result(step, "call_unloaded"), where);
+			assertEquals(Strings.create("Error: " + String.format(HarnessTools.TOOL_NOT_LOADED,
+				"agent_compact_session", "[gamma]")), result(step, "call_unloaded_near"),
+				where + ": a name a skill binds is hinted for skill_load, not as a near miss");
 			assertEquals(Strings.create("Error: " + String.format(HarnessTools.TOOL_NEAR_MISS,
 				"test-echo", "test_echo")), result(step, "call_near_miss"), where);
+			assertEquals(Strings.create("Error: " + String.format(HarnessTools.TOOL_NEAR_MISS,
+				"test_ecoh", "test_echo")), result(step, "call_misspelt"), where);
 			assertEquals(Strings.create("Error: " + String.format(HarnessTools.NO_SUCH_TOOL, "records_read")
 				+ "; " + HarnessTools.USE_TOOL_LIST), result(step, "call_unknown"), where);
 			assertEquals(Strings.create("Error: " + String.format(AbstractLLMAdapter.CALL_HARNESS_DIRECTLY,
