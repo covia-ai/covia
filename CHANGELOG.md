@@ -11,6 +11,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 ### Fixed
 
 - `skill_load` reports only what a load newly makes discoverable: `revealed` no longer repeats skills an earlier load revealed, and `skillIndex` holds just their index lines instead of every discoverable skill, and is left out when nothing is new.
+- A system message that ends an agent's Anthropic call, such as a loaded skill's body, is written to the prompt cache when it is first sent instead of being sent uncached and written on the next call (#726).
 
 ## [0.12.0] - 2026-11-20
 

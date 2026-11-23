@@ -69,6 +69,7 @@ import dev.langchain4j.model.chat.request.json.JsonRawSchema;
 import dev.langchain4j.model.chat.request.json.JsonSchemaElement;
 import dev.langchain4j.model.chat.request.json.JsonStringSchema;
 import dev.langchain4j.model.anthropic.AnthropicChatModel;
+import dev.langchain4j.model.anthropic.AnthropicChatRequestParameters;
 import dev.langchain4j.model.anthropic.internal.mapper.AnthropicMapper;
 import dev.langchain4j.model.ollama.OllamaChatModel;
 import dev.langchain4j.model.ollama.OllamaModelCard;
@@ -1372,7 +1373,8 @@ public class LangChainAdapter extends AAdapter {
 		}
 
 		boolean hasTools = tools != null && tools.count() > 0;
-		boolean needsRequest = hasTools || responseFormat != null;
+		boolean cacheTail = cachesTailAutomatically(provider, messages, cacheMarks);
+		boolean needsRequest = hasTools || responseFormat != null || cacheTail;
 		ChatResponse response;
 		if (needsRequest) {
 			ChatRequest.Builder builder = ChatRequest.builder().messages(chatMessages);
@@ -1394,6 +1396,9 @@ public class LangChainAdapter extends AAdapter {
 				if (responseFormat != null) paramsBuilder.responseFormat(responseFormat);
 				builder.parameters(paramsBuilder.build());
 			} else {
+				if (cacheTail) {
+					builder.parameters(AnthropicChatRequestParameters.builder().cacheAutomatically(true).build());
+				}
 				if (hasTools) {
 					builder.toolSpecifications(toToolSpecifications(tools));
 				}
@@ -1685,35 +1690,91 @@ public class LangChainAdapter extends AAdapter {
 	 * as context an agent pins again after its compaction summary, takes the
 	 * portable form in place: one user message of {@code [system: …]} elements
 	 * in {@code dialect}. The SDK handles the native wire representation.
-	 * Canonical history is untouched. */
+	 * Canonical history is untouched.
+	 *
+	 * <p>A cache mark on a late system message sent natively stays on it only
+	 * when it ends the request where it was placed, for the call to carry
+	 * ({@link #cachesTailAutomatically}); otherwise it goes to the message
+	 * before it in the caller's order, never forward onto a turn it was moved
+	 * after. A batch in the portable form is a user message and takes the mark
+	 * itself. A mark on the leading system messages is dropped: the system
+	 * prompt takes its own. */
 	static NormalisedMessages normaliseNativeSystemMessages(AVector<ACell> messages, Set<Long> cacheMarks,
 			AString dialect) {
 		AVector<ACell> out = Vectors.empty();
 		List<ACell> pending = new ArrayList<>();
+		List<PendingMark> pendingMarks = new ArrayList<>();
 		Set<Long> marks = new java.util.LinkedHashSet<>();
 		boolean started = false;
 		for (long i = 0; i < messages.count(); i++) {
 			ACell message = messages.get(i);
 			ACell role = RT.getIn(message, K_ROLE);
 			if (ROLE_SYSTEM.equals(role) && started) {
+				if (cacheMarks.contains(i)) pendingMarks.add(new PendingMark(pending.size(), out.count()));
 				pending.add(message);
 				continue;
 			}
 			if (ROLE_ASSISTANT.equals(role) && !pending.isEmpty()) {
-				out = appendNativeSystem(out, pending, dialect);
+				out = flushNativeSystem(out, pending, pendingMarks, marks, false, dialect);
 			}
 			if (cacheMarks.contains(i) && !ROLE_SYSTEM.equals(role)) marks.add(out.count());
 			out = out.conj(message);
 			if (!ROLE_SYSTEM.equals(role)) started = true;
 		}
-		out = appendNativeSystem(out, pending, dialect);
+		out = flushNativeSystem(out, pending, pendingMarks, marks, true, dialect);
 		return new NormalisedMessages(out, marks);
+	}
+
+	/** A marked late system message: its place in the pending batch, and how
+	 *  many messages had been sent when it arrived. */
+	private record PendingMark(int position, long arrival) {}
+
+	/** Sends a pending batch ({@link #appendNativeSystem}) and places its marks
+	 *  as {@link #normaliseNativeSystemMessages} describes. */
+	private static AVector<ACell> flushNativeSystem(AVector<ACell> out, List<ACell> pending,
+			List<PendingMark> pendingMarks, Set<Long> marks, boolean endsRequest, AString dialect) {
+		if (pending.isEmpty()) return out;
+		long start = out.count();
+		boolean inline = takesInlineSystem(out);
+		for (PendingMark mark : pendingMarks) {
+			if (!inline) {
+				marks.add(start);
+			} else if (endsRequest && mark.arrival() == start && mark.position() == pending.size() - 1) {
+				marks.add(start + mark.position());
+			} else if (mark.arrival() > 0) {
+				marks.add(mark.arrival() - 1);
+			}
+		}
+		pendingMarks.clear();
+		return appendNativeSystem(out, pending, dialect);
+	}
+
+	/** Whether Anthropic takes a system message after these: only after a user turn. */
+	private static boolean takesInlineSystem(AVector<ACell> messages) {
+		ACell preceding = messages.isEmpty() ? null : RT.getIn(messages.get(messages.count() - 1), K_ROLE);
+		return ROLE_USER.equals(preceding) || ROLE_TOOL.equals(preceding);
+	}
+
+	/**
+	 * Whether this Anthropic call carries its last cache mark with the
+	 * provider's automatic breakpoint: the request ends in a marked system
+	 * message sent inline, which LangChain4j gives no {@code cache_control}.
+	 * The automatic breakpoint lands on the request's last block and takes the
+	 * place of that mark, so the count of breakpoints is unchanged (#726).
+	 */
+	static boolean cachesTailAutomatically(String provider, AVector<ACell> messages, Set<Long> cacheMarks) {
+		if (!"anthropic".equals(provider) || messages.isEmpty()) return false;
+		long last = messages.count() - 1;
+		if (!cacheMarks.contains(last) || !ROLE_SYSTEM.equals(RT.getIn(messages.get(last), K_ROLE))) return false;
+		for (long i = 0; i < last; i++) {
+			if (!ROLE_SYSTEM.equals(RT.getIn(messages.get(i), K_ROLE))) return true;
+		}
+		return false;   // all system prompt, which takes its own mark
 	}
 
 	private static AVector<ACell> appendNativeSystem(AVector<ACell> messages, List<ACell> pending, AString dialect) {
 		if (pending.isEmpty()) return messages;
-		ACell preceding = messages.isEmpty() ? null : RT.getIn(messages.get(messages.count() - 1), K_ROLE);
-		if (ROLE_USER.equals(preceding) || ROLE_TOOL.equals(preceding)) {
+		if (takesInlineSystem(messages)) {
 			for (ACell message : pending) messages = messages.conj(message);
 		} else {
 			// Anthropic takes a system message only after a user turn

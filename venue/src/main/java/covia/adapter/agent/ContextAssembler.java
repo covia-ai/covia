@@ -505,20 +505,24 @@ public final class ContextAssembler {
 
 		/**
 		 * The message indices a caching provider should mark as breakpoints:
-		 * the conversation as it stood when the cycle began, and the tool loop
-		 * so far. System messages are never marked — the provider's system slot
-		 * takes its own mark — and nothing in the tail is.
+		 * the last message of the conversation as it stood when the cycle
+		 * began, and of the tool loop so far. A band ending in system messages,
+		 * such as a loaded skill's body, is marked on the last of them; the
+		 * provider edge carries a mark it cannot put on a system message as
+		 * near as it can (#726). Nothing in the tail is marked, nor the leading
+		 * system messages: the provider's system slot takes its own mark.
 		 */
 		public AVector<ACell> cacheMarks() {
 			AVector<ACell> out = Vectors.empty();
 			if (!cachePrefix) return out;
+			long leading = 0;
+			while (leading < messages.count()
+				&& ROLE_SYSTEM.equals(RT.getIn(messages.get(leading), K_ROLE))) leading++;
 			long last = -1;
 			for (Band band : new Band[] { Band.CONVERSATION, Band.TOOL_LOOP }) {
 				Integer end = marks.get(band);
-				if (end == null || end == 0) continue;
+				if (end == null || end <= leading) continue;
 				long idx = end - 1;
-				while (idx >= 0 && ROLE_SYSTEM.equals(RT.getIn(messages.get(idx), K_ROLE))) idx--;
-				if (idx < 0) continue;
 				if (idx == last) continue;
 				out = out.conj(CVMLong.create(idx));
 				last = idx;

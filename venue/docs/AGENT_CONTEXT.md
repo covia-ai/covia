@@ -732,8 +732,12 @@ Determinism applies when the venue renders a cell: tool and entry order comes fr
 
 **Cache boundaries** are indices into this representation. `cachePrefix`
 defaults to true. When enabled, the edge may mark the end of the initial head,
-`messages` as it stood when the cycle began, and `workingTurn` as it grows. The
-runtime system notices use the preceding supported breakpoint until the SDK supports system-message markers. An explicit model-level
+`messages` as it stood when the cycle began, and `workingTurn` as it grows. Each
+mark is the band's last message, a system message such as a loaded skill's body
+or a runtime notice included, so that message is cached when it is first sent;
+the leading system messages and the inference tail are never marked. A provider
+that cannot mark a system message carries the mark as near as it can
+([MODELS.md](MODELS.md) §5.3). An explicit model-level
 `cachePrefix: false` or call-level `cache: false` omits the marks and the durable
 projection together. A provider may ignore canonical marks or impose a smaller
 breakpoint limit, but it must not change logical order to accommodate them.
