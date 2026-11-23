@@ -1722,8 +1722,8 @@ public final class Skills {
 		if (Loads.isVolatile(entryMeta)) result = result.assoc(Loads.K_VOLATILE, CVMBool.TRUE);
 		if (toolNames.count() > 0) result = result.assoc(Fields.TOOLS, toolNames);
 		if (skill.contributesSources()) {
-			if (skill.skills().count() > 0) result = result.assoc(K_SKILLS, skill.skills());
-			if (skill.skillsets().count() > 0) result = result.assoc(K_SKILLSETS, skill.skillsets());
+			// The contributed refs stay on the loads entry; the result names
+			// what they made loadable instead of listing them again.
 			AMap<AString, ACell> prospectiveLoads = (effectiveLoads == null)
 				? Maps.of(skill.path(), entryMeta)
 				: effectiveLoads.assoc(skill.path(), entryMeta);
