@@ -84,6 +84,10 @@ public final class Skills {
 	public static final AString K_SKILLS = Strings.intern("skills");
 	/** Child skillset refs — directories of skills — contributed while loaded. */
 	public static final AString K_SKILLSETS = Strings.intern("skillsets");
+	/** A load result's names of the skills it newly made discoverable. */
+	public static final AString K_REVEALED = Strings.intern("revealed");
+	/** A load result's index lines for the skills it newly made discoverable. */
+	public static final AString K_SKILL_INDEX = Strings.intern("skillIndex");
 
 	private static final AString K_CONTEXT = Strings.intern("context");
 	private static final AString K_BUDGET  = Strings.intern("budget");
@@ -400,7 +404,12 @@ public final class Skills {
 	 */
 	public static String renderIndex(Engine engine, RequestContext ctx,
 			SkillSources sources, AMap<AString, ACell> effectiveLoads, boolean sourceDiagnostics) {
-		List<SkillIndexEntry> entries = listSkills(engine, ctx, sources);
+		return renderEntries(engine, ctx, listSkills(engine, ctx, sources), effectiveLoads, sourceDiagnostics);
+	}
+
+	/** {@link #renderIndex} for entries already listed; null when they render nothing. */
+	private static String renderEntries(Engine engine, RequestContext ctx,
+			List<SkillIndexEntry> entries, AMap<AString, ACell> effectiveLoads, boolean sourceDiagnostics) {
 		if (entries.isEmpty()) return null;
 		// Live identities of loaded skills, once per render — the (loaded)
 		// marker must not miss a skill loaded via a different address.
@@ -1576,32 +1585,42 @@ public final class Skills {
 		return sources;
 	}
 
+	/** What a load newly made discoverable: the valid skills' names, and the
+	 *  index lines of every new skill (null when there is none). */
+	private record Revealed(AVector<ACell> names, AString index) {
+		static final Revealed NOTHING = new Revealed(Vectors.empty(), null);
+	}
+
 	/**
-	 * The skill names discoverable AFTER a load that were not discoverable
-	 * before — the answer to "what did this get me", without the caller having
-	 * to compare two indexes.
+	 * The skills discoverable AFTER a load that were not discoverable just
+	 * before it — the answer to "what did this get me", without the caller
+	 * having to compare two indexes. {@code before} is every source in effect
+	 * before the load, configured and contributed, so a skill an earlier load
+	 * revealed is not revealed again.
 	 *
 	 * <p>Compared by name, because a name is what {@code skill_load} takes.
 	 * Never throws: this decorates a successful load, and a diagnostic that
 	 * fails must not turn one into an error.</p>
 	 */
-	private static AVector<ACell> newlyDiscoverable(Engine engine, RequestContext ctx,
-			SkillSources before, SkillSources after) {
-		AVector<ACell> out = Vectors.empty();
+	private static Revealed revealed(Engine engine, RequestContext ctx,
+			SkillSources before, SkillSources after, AMap<AString, ACell> loads) {
 		try {
 			Set<String> had = new HashSet<>();
 			for (SkillIndexEntry e : listSkills(engine, ctx, before)) {
 				if (e.name() != null) had.add(e.name());
 			}
+			List<SkillIndexEntry> added = new ArrayList<>();
+			AVector<ACell> names = Vectors.empty();
 			for (SkillIndexEntry e : listSkills(engine, ctx, after)) {
-				if (e.name() != null && e.error() == null && !had.contains(e.name())) {
-					out = out.conj(Strings.create(e.name()));
-				}
+				if (e.name() == null || had.contains(e.name())) continue;
+				added.add(e);
+				if (e.error() == null) names = names.conj(Strings.create(e.name()));
 			}
+			String index = renderEntries(engine, ctx, added, loads, false);
+			return new Revealed(names, (index != null) ? Strings.create(index) : null);
 		} catch (RuntimeException e) {
-			return Vectors.empty();
+			return Revealed.NOTHING;
 		}
-		return out;
 	}
 
 	/**
@@ -1619,7 +1638,7 @@ public final class Skills {
 	 * {@code name} across the agent's sources, or by direct {@code ref}),
 	 * build its loads entry, and assemble the tool result — including the
 	 * body for immediate same-turn use, the declared tool names, the skills a
-	 * contributing load newly revealed (plus the refreshed index), and any
+	 * contributing load newly revealed (named, and as index lines), and any
 	 * declared-but-unresolvable tools. Throws with a diagnosable message on
 	 * any failure (the handler renders it as an {@code Error:} tool result).
 	 *
@@ -1703,23 +1722,20 @@ public final class Skills {
 		if (Loads.isVolatile(entryMeta)) result = result.assoc(Loads.K_VOLATILE, CVMBool.TRUE);
 		if (toolNames.count() > 0) result = result.assoc(Fields.TOOLS, toolNames);
 		if (skill.contributesSources()) {
-			if (skill.skills().count() > 0) result = result.assoc(K_SKILLS, skill.skills());
-			if (skill.skillsets().count() > 0) result = result.assoc(K_SKILLSETS, skill.skillsets());
+			// The contributed refs stay on the loads entry; the result names
+			// what they made loadable instead of listing them again.
 			AMap<AString, ACell> prospectiveLoads = (effectiveLoads == null)
 				? Maps.of(skill.path(), entryMeta)
 				: effectiveLoads.assoc(skill.path(), entryMeta);
 			SkillSources widened = effectiveSources(engine, ctx, sources, prospectiveLoads);
-			// What is NEW, named outright. The refreshed index alone made the
-			// reader diff it against the [Skills] block from the start of the
-			// turn — it has both lists, but has to notice they differ, and a
-			// live agent observably did not: it reported "no new skills" while
-			// listing the revealed ones. Naming them removes the inference.
-			AVector<ACell> revealed = newlyDiscoverable(engine, ctx, sources, widened);
-			if (revealed.count() > 0) {
-				result = result.assoc(Strings.intern("revealed"), revealed);
-			}
-			String index = renderIndex(engine, ctx, widened, prospectiveLoads, false);
-			if (index != null) result = result.assoc(Strings.intern("skillIndex"), Strings.create(index));
+			// What is NEW, named outright, and only that as index lines. A
+			// full refreshed index made the reader diff it against the
+			// [Skills] block — a live agent observably did not, reporting "no
+			// new skills" while listing the revealed ones — and repeated every
+			// discoverable skill on every contributing load.
+			Revealed revealed = revealed(engine, ctx, effective, widened, prospectiveLoads);
+			if (revealed.names().count() > 0) result = result.assoc(K_REVEALED, revealed.names());
+			if (revealed.index() != null) result = result.assoc(K_SKILL_INDEX, revealed.index());
 		}
 		if (unresolved.count() > 0) result = result.assoc(Strings.intern("unresolved"), unresolved);
 

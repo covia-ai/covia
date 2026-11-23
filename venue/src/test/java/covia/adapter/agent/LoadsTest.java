@@ -461,7 +461,8 @@ public class LoadsTest {
 		assertEquals(4, p.marks().get(ContextAssembler.Band.LIVE));
 		assertEquals(8, p.marks().get(ContextAssembler.Band.CONVERSATION));
 		assertEquals(10, p.marks().get(ContextAssembler.Band.TOOL_LOOP));
-		assertEquals(Vectors.of(CVMLong.create(6), CVMLong.create(9)), p.cacheMarks());
+		// Each band is marked on its last message, the retained notices included
+		assertEquals(Vectors.of(CVMLong.create(7), CVMLong.create(9)), p.cacheMarks());
 
 		AMap<AString, ACell> unchanged = GoalTreeContext.applyObservations(frame,
 			ContextAssembler.observations(s, resolve(loads)), 2L);

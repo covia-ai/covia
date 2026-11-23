@@ -130,7 +130,7 @@ print(result)  # {'schema': {'type': 'object', ...}}
 A venue is a single self-contained server. With Docker:
 
 ```bash
-docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/covia-ai/covia:0.12.0
+docker run --rm -p 127.0.0.1:8080:8080 ghcr.io/covia-ai/covia:0.12.1
 ```
 
 `:latest` is the newest unreleased build to pass the full test suite, the one
@@ -141,7 +141,7 @@ invoke-capable local venue, select the image's explicit ephemeral test config:
 
 ```bash
 docker run --rm -p 127.0.0.1:8080:8080 \
-  ghcr.io/covia-ai/covia:0.12.0 /app/config/docker-local.json
+  ghcr.io/covia-ai/covia:0.12.1 /app/config/docker-local.json
 ```
 
 That config grants unrestricted anonymous capabilities and deletes its state on

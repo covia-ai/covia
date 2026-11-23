@@ -402,6 +402,24 @@ boundaries; enabling it suppresses the explicit conversation marks to avoid
 exceeding the provider's four-breakpoint limit. One-hour caching may change
 provider charges.
 
+LangChain4j gives a system message sent inline no `cache_control`, so the
+explicit marks reach system messages this way: a request that ends in a marked
+system message, such as a loaded skill's body after its `skill_load` result,
+carries that mark with the provider's automatic breakpoint, which lands on the
+request's last block, in place of an explicit one; a marked system message
+elsewhere passes its mark to the message before it. A request therefore holds
+no more breakpoints than it has marks. In the portable form a system message
+travels inside a user message, which takes the mark itself.
+
+Claude through OpenRouter (an `anthropic/` model id under `openrouter`) uses
+OpenRouter's automatic caching: the request carries a top-level
+`cache_control`, with a `ttl` when `cacheTtl` is `1h`, and the provider places
+one moving breakpoint on the request's last cacheable block. That path speaks
+OpenRouter's OpenAI-format API, so explicit `cacheMarks` and the other options
+above do not apply to it. `cache:false` sends no `cache_control`, and one given
+in `providerOptions` is sent as it is. Other vendors through OpenRouter cache
+as their provider does.
+
 For example, an agent can set:
 
 ```json

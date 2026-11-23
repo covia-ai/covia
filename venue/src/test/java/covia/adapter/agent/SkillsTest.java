@@ -402,8 +402,8 @@ public class SkillsTest {
 			Maps.of(Fields.NAME, Strings.create("root")), Maps.empty());
 		AVector<ACell> declared = Vectors.of(
 			Strings.create("w/specialists"), Strings.create("w/specialists"));
-		assertEquals(declared,
-			RT.getIn(root.result(), Skills.K_SKILLSETS));
+		assertNull(RT.getIn(root.result(), Skills.K_SKILLSETS),
+			"the result names what the refs made loadable, not the refs");
 		assertTrue(RT.getIn(root.result(), "skillIndex").toString()
 			.contains("- reviewer — Review a result"), root.result().toString());
 		assertEquals(declared,
@@ -1099,5 +1099,80 @@ public class SkillsTest {
 			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/plain"))),
 			Maps.of(Fields.NAME, Strings.create("solo")), Maps.empty());
 		assertNull(RT.getIn(out.result(), "revealed"));
+	}
+
+	/**
+	 * A load's index lists the skills it reveals, not every discoverable
+	 * skill again: the turn's [Skills] block already has the rest, and a
+	 * repeated full index is paid for on every load.
+	 */
+	@Test
+	public void testLoadIndexListsOnlyTheSkillsItReveals() {
+		write("w/lib4/router", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Opens the specialists"),
+			Skills.K_SKILL, Maps.of(Skills.K_SKILLSETS, Vectors.of(Strings.create("w/team4")))));
+		write("w/lib4/archivist", Maps.of(Fields.DESCRIPTION, Strings.create("Keeps archives")));
+		write("w/team4/reviewer", Maps.of(Fields.DESCRIPTION, Strings.create("Reviews")));
+
+		Skills.SkillSources configured =
+			Skills.SkillSources.ofSkillsets(Vectors.of(Strings.create("w/lib4")));
+		Skills.LoadOutcome out = Skills.load(engine, ctx, configured,
+			Maps.of(Fields.NAME, Strings.create("router")), Maps.empty());
+
+		assertEquals(java.util.Set.of("reviewer"), listed(RT.getIn(out.result(), "skillIndex")),
+			out.result().toString());
+	}
+
+	/**
+	 * What a load reveals is what was not discoverable just before it, so a
+	 * child that names a sibling its parent already revealed reveals nothing
+	 * new, and one that also names a grandchild reveals only the grandchild.
+	 */
+	@Test
+	public void testLoadRevealsOnlyWhatWasNotAlreadyDiscoverable() {
+		write("w/parent5", Maps.of(
+			Fields.NAME, Strings.create("parent5"),
+			Fields.DESCRIPTION, Strings.create("Opens the children"),
+			Skills.K_SKILL, Maps.of(Skills.K_SKILLS, Vectors.of(
+				Strings.create("w/kids5/results"), Strings.create("w/kids5/files"),
+				Strings.create("w/kids5/notes")))));
+		write("w/kids5/results", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Reads results"),
+			Skills.K_SKILL, Maps.of(Skills.K_SKILLS, Vectors.of(
+				Strings.create("w/kids5/files"), Strings.create("w/deeper5/history")))));
+		write("w/kids5/notes", Maps.of(
+			Fields.DESCRIPTION, Strings.create("Reads notes"),
+			Skills.K_SKILL, Maps.of(Skills.K_SKILLS, Vectors.of(Strings.create("w/kids5/files")))));
+		write("w/kids5/files", Maps.of(Fields.DESCRIPTION, Strings.create("Reads original files")));
+		write("w/deeper5/history", Maps.of(Fields.DESCRIPTION, Strings.create("Reads past results")));
+
+		Skills.SkillSources configured =
+			Skills.SkillSources.ofSkills(Vectors.of(Strings.create("w/parent5")));
+		Skills.LoadOutcome parent = Skills.load(engine, ctx, configured,
+			Maps.of(Fields.NAME, Strings.create("parent5")), Maps.empty());
+		AMap<AString, ACell> loads = Maps.of(parent.path(), parent.entryMeta());
+
+		Skills.LoadOutcome notes = Skills.load(engine, ctx, configured,
+			Maps.of(Fields.NAME, Strings.create("notes")), loads);
+		assertNull(RT.getIn(notes.result(), "revealed"), notes.result().toString());
+		assertNull(RT.getIn(notes.result(), "skillIndex"), notes.result().toString());
+
+		Skills.LoadOutcome results = Skills.load(engine, ctx, configured,
+			Maps.of(Fields.NAME, Strings.create("results")), loads);
+		assertEquals(Vectors.of(Strings.create("history")),
+			RT.getIn(results.result(), "revealed"), results.result().toString());
+		assertEquals(java.util.Set.of("history"), listed(RT.getIn(results.result(), "skillIndex")),
+			results.result().toString());
+	}
+
+	/** The skill names an index lists, one per {@code - <name> — ...} line. */
+	private static java.util.Set<String> listed(ACell index) {
+		java.util.Set<String> names = new java.util.HashSet<>();
+		if (index == null) return names;
+		for (String line : index.toString().split("\n")) {
+			int dash = line.indexOf(" — ");
+			if (line.startsWith("- ") && dash > 2) names.add(line.substring(2, dash));
+		}
+		return names;
 	}
 }

@@ -1738,6 +1738,66 @@ public class LangChainAdapterTest {
 		}
 	}
 
+	/**
+	 * OpenRouter caches a Claude model only when the request asks: an
+	 * Anthropic model gets Anthropic's top-level automatic cache_control while
+	 * caching is on, other vendors and cache:false get none, and a
+	 * cache_control the caller set is kept (#648).
+	 */
+	@Test
+	public void testOpenRouterAsksClaudeToCache() throws Exception {
+		AtomicReference<ACell> request = new AtomicReference<>();
+		HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+		server.createContext("/", exchange -> {
+			request.set(JSON.parse(new String(exchange.getRequestBody().readAllBytes(),
+				java.nio.charset.StandardCharsets.UTF_8)));
+			byte[] body = """
+				{"id":"r","object":"chat.completion","created":0,"model":"m",
+				 "choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+				 "usage":{"prompt_tokens":5,"completion_tokens":1,"total_tokens":6}}
+				""".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+			exchange.getResponseHeaders().set("content-type", "application/json");
+			exchange.sendResponseHeaders(200, body.length);
+			try (var out = exchange.getResponseBody()) { out.write(body); }
+		});
+		server.start();
+		Engine engine = covia.venue.TestEngine.ENGINE;
+		try {
+			LangChainAdapter adapter = (LangChainAdapter) engine.getAdapter("langchain");
+			AMap<AString, ACell> meta = Maps.of(Strings.create("operation"),
+				Maps.of(Strings.create("adapter"), Strings.create("langchain:openrouter")));
+			AMap<AString, ACell> claude = Maps.of(
+				Strings.create("prompt"), Strings.create("hello"),
+				Strings.create("model"), Strings.create("anthropic/claude-sonnet-5"),
+				Strings.create("apiKey"), Strings.create("sk-caller"),
+				Strings.create("url"), Strings.create("http://127.0.0.1:" + server.getAddress().getPort() + "/v1"));
+			// The venue dials any url, so its own context reaches the local fake.
+			RequestContext venue = engine.venueContext();
+
+			adapter.invokeFuture(venue, meta, claude).get(10, TimeUnit.SECONDS);
+			assertEquals("ephemeral", RT.getIn(request.get(), "cache_control", "type").toString(), request.get().toString());
+			assertNull(RT.getIn(request.get(), "cache_control", "ttl"), "the default lifetime is the provider's");
+
+			adapter.invokeFuture(venue, meta, claude.assoc(Strings.create("modelOptions"),
+				JSON.parse("{\"cacheTtl\":\"1h\"}"))).get(10, TimeUnit.SECONDS);
+			assertEquals("1h", RT.getIn(request.get(), "cache_control", "ttl").toString());
+
+			adapter.invokeFuture(venue, meta, claude.assoc(Strings.create("model"),
+				Strings.create("openai/gpt-5.4-mini"))).get(10, TimeUnit.SECONDS);
+			assertNull(RT.getIn(request.get(), "cache_control"), "other vendors cache on their own");
+
+			adapter.invokeFuture(venue, meta, claude.assoc(Strings.create("cache"), CVMBool.FALSE))
+				.get(10, TimeUnit.SECONDS);
+			assertNull(RT.getIn(request.get(), "cache_control"), "cache:false asks for nothing");
+
+			adapter.invokeFuture(venue, meta, claude.assoc(Strings.create("providerOptions"),
+				JSON.parse("{\"cache_control\":{\"type\":\"ephemeral\",\"ttl\":\"1h\"}}"))).get(10, TimeUnit.SECONDS);
+			assertEquals("1h", RT.getIn(request.get(), "cache_control", "ttl").toString(), "the caller's own is kept");
+		} finally {
+			server.stop(0);
+		}
+	}
+
 	@Test
 	public void testExtractTuningAcceptsIntegerNumbers() {
 		// temperature: 0 arrives as a LONG from JSON — the deterministic-

@@ -8,6 +8,19 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-23
+
+### Added
+
+- Claude models through OpenRouter (`anthropic/…` ids) are prompt-cached with OpenRouter's automatic caching, honouring `cache` and `modelOptions.cacheTtl` (#648).
+
+### Fixed
+
+- `skill_load` reports only what a load newly makes discoverable: `revealed` no longer repeats skills an earlier load revealed, and `skillIndex` holds just their index lines instead of every discoverable skill, and is left out when nothing is new.
+- A system message that ends an agent's Anthropic call, such as a loaded skill's body, is written to the prompt cache when it is first sent instead of being sent uncached and written on the next call (#726).
+- `skill_load` results no longer repeat the loaded skill's `skills` and `skillsets` refs; `revealed` and `skillIndex` say what they made loadable.
+- A forced `agent:trigger` always gets a cycle that begins after it: one that arrived as a run was ending ran no cycle, and one that arrived during a cycle was absorbed by it. The trigger records a wake on the agent, and its `wait` covers that cycle; an agent's trigger of itself from its own cycle still asks for none.
+
 ## [0.12.0] - 2026-11-20
 
 ### Added
@@ -1121,7 +1134,8 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.12.0...HEAD
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.12.1...HEAD
+[0.12.1]: https://github.com/covia-ai/covia/compare/0.12.0...0.12.1
 [0.12.0]: https://github.com/covia-ai/covia/compare/0.11.0...0.12.0
 [0.11.0]: https://github.com/covia-ai/covia/compare/0.10.0...0.11.0
 [0.10.0]: https://github.com/covia-ai/covia/compare/0.9.11...0.10.0

@@ -3632,6 +3632,7 @@ public class AgentAdapterTest {
 		assertThrows(covia.exception.JobFailedException.class, () -> job.awaitResult(5000));
 		assertTrue(job.getErrorMessage().contains("config.operation"), job.getErrorMessage());
 		assertTrue(job.getErrorMessage().contains("agent:update"), job.getErrorMessage());
+		assertFalse(unconfigured.hasDueWake(Long.MAX_VALUE), "a refused trigger leaves no wake behind");
 	}
 
 	/**

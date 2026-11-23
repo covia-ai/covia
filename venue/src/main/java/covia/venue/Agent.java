@@ -80,6 +80,8 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	/** Handle of this agent's single pending {@code agent:trigger} wake event in the
 	 *  venue grid scheduler, or absent when no wake is armed. */
 	private static final AString K_WAKE_HANDLE = Strings.intern("wakeHandle");
+	/** When the agent's own wake falls due ({@link #wake}), absent when none is pending. */
+	private static final AString K_WAKE_TIME = Fields.WAKE_TIME;
 	/** The running cycle's claim on the record, {@code inCycle}, holds its epoch here. */
 	private static final AString K_EPOCH = Strings.intern("epoch");
 
@@ -625,7 +627,8 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 	 * finds it interrupted rather than waiting. The picked session, when it
 	 * exists, is claimed with the same epoch and given the cycle's input
 	 * ({@link Session#beginCycle}); a cycle that picked only a session
-	 * that has gone takes nothing.
+	 * that has gone takes nothing. A cycle that begins also takes the agent's
+	 * own wake if it has fallen due ({@link #wake}), whatever it picked.
 	 *
 	 * @param taskId the picked task, or null
 	 * @param pickedTask the task's row as it was picked
@@ -651,7 +654,11 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 			AMap<AString, ACell> claim = Maps.of(K_EPOCH, epoch);
 			if (sessionClaimed) claim = claim.assoc(Fields.SESSION_ID, sid);
 			AMap<AString, ACell> issued = claim;
-			draft.update(r -> r.assoc(K_IN_CYCLE, issued));
+			long now = now().longValue();
+			draft.update(r -> {
+				AMap<AString, ACell> claimed = r.assoc(K_IN_CYCLE, issued);
+				return isWakeDue(claimed, now) ? claimed.dissoc(K_WAKE_TIME) : claimed;
+			});
 			return sessionClaimed ? CycleStart.SESSION : CycleStart.NO_SESSION;
 		}), CycleStart.STOPPED);
 	}
@@ -891,6 +898,29 @@ public class Agent extends ALatticeComponent<ACell> implements TransactionalComp
 				.assoc(Fields.RESULT, suspensionDetail(r));
 			return r.assoc(K_TIMELINE, extractTimeline(r).conj(stopped));
 		});
+	}
+
+	/**
+	 * Records a wake of the agent itself, due now, in one atomic update: until
+	 * a cycle begins and takes it ({@link #beginCycle}) the agent has work
+	 * ({@link #hasDueWake}), so the next cycle to begin runs for it, whatever
+	 * work it picks (AGENT_LOOP.md §4.6). A wake already pending stands, so
+	 * wakes recorded before a cycle begins are taken together. A stopped agent
+	 * records none.
+	 */
+	public void wake() {
+		long due = now().longValue();
+		update(r -> isStopped(r) || isWakeDue(r, due) ? r : r.assoc(K_WAKE_TIME, CVMLong.create(due)));
+	}
+
+	/** Whether the agent's own wake ({@link #wake}) has fallen due by {@code now}. */
+	public boolean hasDueWake(long now) {
+		AMap<AString, ACell> record = getRecord();
+		return record != null && isWakeDue(record, now);
+	}
+
+	private static boolean isWakeDue(AMap<AString, ACell> record, long now) {
+		return record.get(K_WAKE_TIME) instanceof CVMLong wake && wake.longValue() > 0 && wake.longValue() <= now;
 	}
 
 	/**

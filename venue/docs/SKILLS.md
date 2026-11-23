@@ -243,7 +243,7 @@ A loaded skill may contribute more of both kinds through `skill.skills` and `ski
 
 Effective sources are the configured refs followed by the immediate contributions of loaded skills, deduplicated first-wins **per kind**, so configured refs retain precedence. Each contributed ref has the same grammar and capability checks as a configured one; contributing a ref does not grant permission to read it.
 
-Children are **discovered, not auto-loaded**. Loading `workspace` returns the refreshed effective index in its acknowledgement, makes the skills under `v/skills/data` and the single `sql-review` path addressable by `skill_load {name}` on the next tool-loop step, and names newly revealed entries explicitly. Loading one of those children may reveal a further layer. The resolver never walks an unloaded subtree, so cycles are inert and a broad hierarchy does not flood the prompt.
+Children are **discovered, not auto-loaded**. Loading `workspace` makes the skills under `v/skills/data` and the single `sql-review` path addressable by `skill_load {name}` on the next tool-loop step, and its acknowledgement names those newly revealed skills and gives their index lines. Loading one of those children may reveal a further layer. The resolver never walks an unloaded subtree, so cycles are inert and a broad hierarchy does not flood the prompt.
 
 Contributed refs are denormalised onto the parent's loads entry, like tool refs. Editing a loaded parent's lists therefore needs unload/reload; the target directories and skill metadata remain live. Unloading the parent retracts its contributed sources. A child already loaded remains loaded independently and continues to contribute its own until it too is unloaded.
 
@@ -268,7 +268,7 @@ skills. A loaded skill's header gives its exact removal key.
 ```
 
 - One line per skill: `- <name> — <description>`, with a `(loaded)` suffix when the prefix being built holds a skill-flagged loads entry for it ([AGENT_CONTEXT.md](./AGENT_CONTEXT.md) §3.2.3).
-- Later catalog changes do not rewrite it. An explicit load returns a refreshed index and revealed names in its appended tool exchange. A changed declarative config causes the config-owned prefix, including this index, to be rebuilt on the session's next inference; reapplying equal config does nothing. `agent:reloadContext` forces a same-config refresh from current sources. Compaction/reset also build a replacement initial snapshot.
+- Later catalog changes do not rewrite it. An explicit load returns the skills it newly revealed, by name and as index lines, in its appended tool exchange. A changed declarative config causes the config-owned prefix, including this index, to be rebuilt on the session's next inference; reapplying equal config does nothing. `agent:reloadContext` forces a same-config refresh from current sources. Compaction/reset also build a replacement initial snapshot.
 - Rendering delegates to the same function the `skills:list` op uses (§8), so the injected index and the op output can never drift.
 
 ---
@@ -279,7 +279,7 @@ skills. A loaded skill's header gives its exact removal key.
 
 ```
 skill_load {
-  name?:     string   — a skill name from the [Skills] index
+  name?:     string   — a skill name from the [Skills] index or an earlier load's revealed skills
   ref?:      string   — direct address of a skill (a/<hash>, v/skills/<x>, w/skills/<x>)
   budget?:   integer  — accounting budget (default: skill.budget, else 2000; clamp [256, 10000])
   volatile?: boolean  — watch the skill source and append only when its rendered value changes
@@ -293,9 +293,9 @@ A `name` that matches nothing fails with a message naming the skills that ARE av
 1. Resolves the skill (§3) — failure returns a diagnosable `Error:` tool result naming the skill and reason.
 2. Writes a **skill-flagged entry** into the innermost loads tier (session for llmagent, frame for goaltree).
 3. Activates the skill's tools — `skill.tools`, plus the asset itself when it carries an `operation` facet (§3.4). Their exact schemas and routes are materialised onto the load and append as one trusted tool-addition event. Cached providers keep their fixed manifest and dispatch these names through `invoke_tool` until a provider edge supports native additions. A load already present when a context is materialised contributes directly to that initial vector. Explicitly supplied `tools` metadata remains authoritative.
-4. Adds the skill's contributed refs to the effective discovery sources and reports what that gained: `revealed` names the skills that were not discoverable before, alongside the refreshed `skillIndex`. Named children can be loaded from the next tool-loop iteration and appear in the refreshed discovery index.
+4. Adds the skill's contributed refs to the effective discovery sources and reports what that gained, compared with every source in effect just before the load, configured or contributed by an earlier load: `revealed` names the newly discoverable skills, and `skillIndex` gives their index lines in the `[Skills]` format (§4.3), an invalid one marked INVALID. A load that makes nothing new discoverable has neither. Named children can be loaded from the next tool-loop iteration.
 
-   `revealed` exists because the index alone was not enough: the reader already has the turn-start `[Skills]` block and the refreshed index, but must notice they differ. A live agent observably did not — it reported "no new skills" while listing the revealed ones. Naming them removes the inference.
+   Only what is new is listed. A full refreshed index left the reader to notice how it differed from the `[Skills]` block, and a live agent observably did not: it reported "no new skills" while listing the revealed ones. It also repeated every discoverable skill on each contributing load.
 5. By default, appends the body as a loaded-skill system event and the skill's `skill.context` as one `loaded_context` result under the same key. The next inference in the same tool loop therefore sees both without regenerating either. With `volatile: true`, the persistent declaration is instead watched before each inference: its first value, and only later changed values, append through the same observation lifecycle as other volatile loads.
 6. Returns a compact, purely structural acknowledgement. The body and contributed data occur only in the appended events, not again in this result, and there is no prose: the unload key is `path`, `volatile: true` marks a watched load, and `existing` names the path identical content was already loaded under (the load is then a no-op). `tools`, `revealed`, `skillIndex` and `unresolved` appear only when present:
 
@@ -305,7 +305,8 @@ A `name` that matches nothing fails with a message naming the skills that ARE av
   "skill": "pdf-processing",
   "path": "w/skills/pdf-processing",
   "tools": ["file_read", "schema_validate"],
-  "skillIndex": "- pdf-table-extraction — Extract tables from PDFs\n...",
+  "revealed": ["pdf-table-extraction"],
+  "skillIndex": "- pdf-table-extraction — Extract tables from PDFs",
   "unresolved": ["v/ops/gone/op"]
 }
 ```

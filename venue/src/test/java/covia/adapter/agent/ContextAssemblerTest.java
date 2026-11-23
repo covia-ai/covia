@@ -232,8 +232,13 @@ public class ContextAssemblerTest {
 		assertNull(RT.getIn(p.toL3Input(null), "cacheMarks"));
 	}
 
+	/**
+	 * A band ending in system messages, such as a loaded skill's body, is
+	 * marked at its last message: the provider edge decides how a mark on a
+	 * system message is carried (#726).
+	 */
 	@Test
-	public void testCacheBoundaryEndingInSystemUsesPrecedingConversationMessage() {
+	public void testCacheBoundaryEndingInSystemMarksTheBandsLastMessage() {
 		Prompt p = new Prompt(10_000);
 		p.add(Maps.of("role", "user", "content", "request"));
 		p.add(Maps.of("role", "assistant", "content", "answer"));
@@ -241,7 +246,7 @@ public class ContextAssemblerTest {
 		p.add(Maps.of("role", "system", "content", "second event"));
 		p.mark(ContextAssembler.Band.CONVERSATION);
 
-		assertEquals(Vectors.of(CVMLong.create(1)), p.cacheMarks());
+		assertEquals(Vectors.of(CVMLong.create(3)), p.cacheMarks());
 	}
 
 	@Test
