@@ -17,6 +17,7 @@ import covia.api.Abilities;
 import covia.api.Fields;
 import covia.exception.FaultException;
 import covia.grid.Asset;
+import covia.utils.NearestNames;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import java.util.HashMap;
@@ -158,7 +159,7 @@ final class HarnessTools {
 
 	/** A tool whose skill is not loaded: the tool, then the skills that provide it. */
 	static final String TOOL_NOT_LOADED = "tool '%s' is not loaded; call skill_load with one of %s first";
-	/** A name that differs from a callable tool only by case or separator. */
+	/** A name close to a callable tool's ({@link NearestNames}): the name, then the tool. */
 	static final String TOOL_NEAR_MISS = "no tool named '%s'; did you mean '%s'?";
 	/** A name nothing on this agent's surface provides; a tail follows. */
 	static final String NO_SUCH_TOOL = "no tool named '%s', and it is not an operation reference";
@@ -180,14 +181,13 @@ final class HarnessTools {
 
 	/**
 	 * Why {@code name}, which binds no tool and resolves to no operation,
-	 * cannot be called, and what would make it callable when that is certain
-	 * (#643). A near miss of a callable name is named; a tool is hinted for
-	 * {@code skill_load} only when this agent is offered it and an advertised
-	 * skill would bind exactly that name.
+	 * cannot be called, with the one hint most likely to fix it (#643). A name
+	 * an advertised skill would bind exactly is spelt right and only needs its
+	 * skill, so it is hinted for {@code skill_load} when this agent is offered
+	 * it; otherwise the callable tool it most likely misspells is named, and
+	 * failing both, what the session can call.
 	 */
 	static String unboundTool(String name, ToolSurface surface) {
-		String near = nearMiss(name, surface.callable());
-		if (near != null) return String.format(TOOL_NEAR_MISS, name, near);
 		LoadScope scope = surface.scope();
 		if (offers(scope.config, SKILL_LOAD)) {
 			List<String> providers = Skills.providersOf(scope.engine, scope.context,
@@ -199,6 +199,8 @@ final class HarnessTools {
 				return String.format(TOOL_NOT_LOADED, name, list);
 			}
 		}
+		String near = nearMiss(name, surface.callable());
+		if (near != null) return String.format(TOOL_NEAR_MISS, name, near);
 		return noSuchTool(name, surface.callable());
 	}
 
@@ -212,16 +214,12 @@ final class HarnessTools {
 		return String.format(NO_SUCH_TOOL, name) + "; " + tail;
 	}
 
-	/** The callable name equal to {@code name} up to case and {@code -}/{@code _}, if one. */
+	/** The callable tool {@code name} most likely meant ({@link NearestNames}), if one. */
 	private static String nearMiss(String name, Set<String> callable) {
-		String key = name.toLowerCase(java.util.Locale.ROOT).replace('-', '_');
-		for (String candidate : callable) {
-			if (!candidate.equals(name)
-					&& candidate.toLowerCase(java.util.Locale.ROOT).replace('-', '_').equals(key)) {
-				return candidate;
-			}
-		}
-		return null;
+		// Sorted, so the answer never depends on the set's order; a name is no near miss of itself
+		java.util.TreeSet<String> others = new java.util.TreeSet<>(callable);
+		others.remove(name);
+		return NearestNames.nearest(name, others);
 	}
 
 	/** Whether the shared rule ({@link #offered}) offers this agent a harness tool. */
