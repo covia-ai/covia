@@ -18,6 +18,7 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - An agent's `[From …]` hint names each principal as the agent would refer to it (your owner, you, sibling agent `g/<id>`, user `<did>`, agent `<ownerDID>/g/<id>`, an anonymous caller, the venue) and access tokens and callables by their paths; it no longer says "venue-verified" or "not your owner", and the standard templates explain the new wording.
 - A request the venue's own code makes for a principal reads as that principal directly rather than as a sign-in.
 - The owner's messages carry the `[From …]` hint only when where they come from changes, so a conversation over one HTTP login or access token is labelled once; every other source is still labelled on every message.
+- Refusals of an unknown setting or input field in the Convex, P2P, preferences, Python, Discord, Slack and WhatsApp adapters name the one most likely meant, when one is close.
 
 ### Fixed
 

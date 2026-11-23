@@ -83,7 +83,7 @@ public abstract class AWebhookMessagingAdapter<S extends WebhookBotSpec>
 
 	@Override public final synchronized void configure(AMap<AString, ACell> settings, boolean strict) {
 		if (settings == null) settings = Maps.empty();
-		if (settings.containsKey(MessagingSettings.key("statePath"))) throw new ConfigurationException(MessagingSettings.UNKNOWN.formatted("statePath"));
+		if (settings.containsKey(MessagingSettings.key("statePath"))) throw new ConfigurationException(MessagingSettings.UNKNOWN.formatted("statePath", ""));
 		String endpoint;
 		var parsed = new LinkedHashMap<String, S>();
 		try {

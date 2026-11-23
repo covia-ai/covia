@@ -28,6 +28,7 @@ import covia.api.Fields;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
 import covia.exception.UnavailableException;
+import covia.utils.NearestNames;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -141,8 +142,11 @@ public class P2PAdapterTest {
 		assertEquals("peer.example", on.peers().get(0).host());
 		assertEquals(18888, on.peers().get(0).port());
 
-		assertEquals(P2PAdapter.UNKNOWN_SETTING.formatted("listen"), assertThrows(ConfigurationException.class,
+		assertEquals(P2PAdapter.UNKNOWN_SETTING.formatted("listen", ""), assertThrows(ConfigurationException.class,
 			() -> P2PAdapter.parse(Maps.of("listen", true), true)).getMessage(), "strict mode rejects unknown settings");
+		assertEquals(P2PAdapter.UNKNOWN_SETTING.formatted("peer", NearestNames.DID_YOU_MEAN.formatted("peers")),
+			assertThrows(ConfigurationException.class,
+				() -> P2PAdapter.parse(Maps.of("peer", Vectors.empty()), true)).getMessage(), "a near miss names the setting meant");
 		P2PAdapter.parse(Maps.of("listen", true), false);
 		assertEquals(P2PAdapter.NOT_BOOLEAN.formatted("join"), assertThrows(ConfigurationException.class,
 			() -> P2PAdapter.parse(Maps.of("join", "yes"), false)).getMessage());

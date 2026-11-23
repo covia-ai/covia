@@ -7,6 +7,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -30,6 +31,7 @@ import covia.exception.UnsupportedException;
 import covia.python.PythonException;
 import covia.python.PythonRuntime;
 import covia.python.PythonScript;
+import covia.utils.NearestNames;
 import covia.venue.RequestContext;
 
 /**
@@ -67,8 +69,8 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 	public static final String NOT_LOADED = "Python operations are loaded when the python adapter starts";
 	/** A malformed setting: where in {@code adapters}, then what is wrong with it. */
 	public static final String MALFORMED = "Malformed configuration at adapters.%s: %s";
-	/** A setting this adapter does not know, refused under strictConfig: where, then the key. */
-	public static final String UNKNOWN_SETTING = "Unknown configuration field adapters.%s.%s";
+	/** A setting this adapter does not know, refused under strictConfig: where, the key, then {@link NearestNames#hint}. */
+	public static final String UNKNOWN_SETTING = "Unknown configuration field adapters.%s.%s%s";
 	/** A script a setting names that is not a readable file: the setting, then the path. */
 	public static final String SCRIPT_NOT_FOUND = "adapters.python.%s names no readable file: %s";
 	/** A changed configuration offered once the adapter is installed. */
@@ -177,7 +179,8 @@ public final class PythonAdapter extends AAdapter implements AutoCloseable {
 			Set<String> known, String path, boolean strict) {
 		for (AString key : map.keySet()) {
 			if (known.contains(key.toString())) continue;
-			String message = UNKNOWN_SETTING.formatted(path, key);
+			// Sorted, so the hint never depends on the set's order
+			String message = UNKNOWN_SETTING.formatted(path, key, NearestNames.hint(key.toString(), new TreeSet<>(known)));
 			if (strict) throw new ConfigurationException(message);
 			log.warn(message);
 		}

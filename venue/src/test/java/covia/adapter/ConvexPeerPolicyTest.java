@@ -31,6 +31,7 @@ import convex.core.lang.RT;
 import covia.api.Fields;
 import covia.exception.ConfigurationException;
 import covia.grid.Job;
+import covia.utils.NearestNames;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -214,8 +215,12 @@ class ConvexPeerPolicyTest {
 	@Test
 	void peerSettingsAreValidated() {
 		ConvexAdapter adapter = new ConvexAdapter();
-		assertThrows(ConfigurationException.class,
-			() -> adapter.configure(Maps.of("peers", "localhost:1"), true), "unknown setting under strict config");
+		assertEquals(ConvexAdapter.UNKNOWN_SETTING.formatted("peers", NearestNames.DID_YOU_MEAN.formatted("peer")),
+			assertThrows(ConfigurationException.class,
+				() -> adapter.configure(Maps.of("peers", "localhost:1"), true)).getMessage(),
+			"an unknown setting under strict config names the setting meant");
+		assertEquals(ConvexAdapter.UNKNOWN_SETTING.formatted("relay", ""), assertThrows(ConfigurationException.class,
+			() -> adapter.configure(Maps.of("relay", true), true)).getMessage(), "nothing is named when nothing is close");
 		assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of("anyPeer", "yes"), false), "anyPeer is a boolean");
 		for (Object timeout : new Object[] {0L, -5L, 1.5, "20000"}) {

@@ -2,6 +2,7 @@ package covia.adapter.messaging;
 
 import java.util.LinkedHashSet;
 import java.util.Set;
+import java.util.TreeSet;
 
 import convex.core.data.ACell;
 import convex.core.data.AMap;
@@ -12,6 +13,7 @@ import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
 import covia.exception.InvalidInputException;
 import covia.lattice.CapabilityChecker;
+import covia.utils.NearestNames;
 import covia.venue.AgentAddress;
 
 /** Small validation helpers shared by HTTP messaging providers. */
@@ -20,7 +22,8 @@ public final class MessagingSettings {
 	public static final String REQUIRED = "%s must be a non-empty string";
 	public static final String BOOLEAN = "%s must be boolean";
 	public static final String ARRAY = "%s must be an array of non-empty string IDs";
-	public static final String UNKNOWN = "Unknown setting: %s";
+	/** A setting or input field not known here: its name, then {@link NearestNames#hint} or "". */
+	public static final String UNKNOWN = "Unknown setting: %s%s";
 	public static final String INVALID_NAME = "Bot name must match [A-Za-z0-9_-]+";
 	public static final String INVALID_USER = "user must be a bare DID, u:<user> for a user of this venue, or public";
 	public static final String HANDLER = "Exactly one of agent, operation or relay is required";
@@ -88,13 +91,15 @@ public final class MessagingSettings {
 	}
 	public static void known(AMap<AString, ACell> map, Set<String> fields) {
 		for (var entry : map.entrySet()) if (!(entry.getKey() instanceof AString s) || !fields.contains(s.toString())) {
-			throw new IllegalArgumentException(UNKNOWN.formatted(entry.getKey()));
+			// Sorted, so the hint never depends on the set's order
+			String given = String.valueOf(entry.getKey());
+			throw new IllegalArgumentException(UNKNOWN.formatted(given, NearestNames.hint(given, new TreeSet<>(fields))));
 		}
 	}
 	public static void validate(String name, AMap<AString, ACell> map, Set<String> fields, Set<String> credentials, boolean strict) {
 		if (!name.matches("[A-Za-z0-9_-]+")) throw new IllegalArgumentException(INVALID_NAME);
 		if (strict) known(map, fields);
-		if (map.containsKey(key("statePath"))) throw new IllegalArgumentException(UNKNOWN.formatted("statePath"));
+		if (map.containsKey(key("statePath"))) throw new IllegalArgumentException(UNKNOWN.formatted("statePath", ""));
 		String user = required(map, "user");
 		if (!user.equals("public") && (!CapabilityChecker.namesPrincipal(user) || user.contains("/") || user.isBlank())) throw new IllegalArgumentException(INVALID_USER);
 		String agent = optional(map, "agent"), operation = optional(map, "operation");

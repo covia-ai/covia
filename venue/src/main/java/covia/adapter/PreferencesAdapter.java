@@ -23,6 +23,7 @@ import covia.lattice.Covia;
 import covia.exception.AuthException;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
+import covia.utils.NearestNames;
 import covia.venue.AdapterState;
 import covia.venue.RequestContext;
 
@@ -65,7 +66,8 @@ public class PreferencesAdapter extends AAdapter {
 	public static final String MERGE_NEEDS_MAP = "merge needs a map value, and a map or nothing at '%s'; use set, append or insert for other values";
 	public static final String TOO_LARGE = "Preferences would be %d bytes, over the limit of %d; remove or shorten something first";
 
-	public static final String UNKNOWN_SETTING = "%s: unknown setting '%s'";
+	/** A setting not known here: where, the setting, then {@link NearestNames#hint}. */
+	public static final String UNKNOWN_SETTING = "%s: unknown setting '%s'%s";
 	public static final String BAD_LIMIT = "%s must be a positive integer, got: %s";
 	public static final String BAD_USERS = "adapters.preferences.users must map each DID to its settings";
 
@@ -110,7 +112,11 @@ public class PreferencesAdapter extends AAdapter {
 	private static void rejectUnknown(AMap<AString, ACell> config, Set<AString> known, String at) {
 		for (long i = 0; i < config.count(); i++) {
 			AString key = config.entryAt(i).getKey();
-			if (!known.contains(key)) throw new ConfigurationException(UNKNOWN_SETTING.formatted(at, key));
+			if (!known.contains(key)) {
+				// Sorted, so the hint never depends on the set's order
+				var names = known.stream().map(AString::toString).sorted().toList();
+				throw new ConfigurationException(UNKNOWN_SETTING.formatted(at, key, NearestNames.hint(key.toString(), names)));
+			}
 		}
 	}
 

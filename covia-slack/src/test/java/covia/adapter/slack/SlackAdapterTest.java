@@ -55,7 +55,7 @@ class SlackAdapterTest {
 			assertTrue(status.contains("/webhooks/slack/c-main"));
 			assertNotNull(f.engine.resolvePath(Strings.create("v/ops/slack/send"), f.engine.venueContext()));
 			assertNull(f.engine.resolvePath(Strings.create("v/ops/slack/download"), f.engine.venueContext()), "Slack ships no download operation");
-			assertEquals(MessagingSettings.UNKNOWN.formatted("statePath"), assertThrows(ConfigurationException.class,
+			assertEquals(MessagingSettings.UNKNOWN.formatted("statePath", ""),assertThrows(ConfigurationException.class,
 				() -> f.engine.configureAdapter(NAME, Maps.of("statePath", "w/other"))).getMessage());
 			assertEquals(MessagingHttp.INVALID_URL, assertThrows(ConfigurationException.class,
 				() -> f.engine.configureAdapter(NAME, Maps.of("apiUrl", "http://remote.example"))).getMessage());

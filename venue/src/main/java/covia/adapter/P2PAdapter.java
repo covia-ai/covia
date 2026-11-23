@@ -48,6 +48,7 @@ import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.UnavailableException;
 import covia.exception.UnsupportedException;
+import covia.utils.NearestNames;
 import covia.venue.Config;
 import covia.venue.RequestContext;
 
@@ -110,8 +111,8 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 		"This venue has not joined the P2P network (adapters.p2p.join is not true)";
 	public static final String SELF_CONNECT = "That is this venue's own node";
 
-	/** Refusals of the {@code adapters.p2p} settings. */
-	public static final String UNKNOWN_SETTING = "adapters.p2p: unknown setting '%s'";
+	/** Refusals of the {@code adapters.p2p} settings; an unknown one's name is followed by {@link NearestNames#hint}. */
+	public static final String UNKNOWN_SETTING = "adapters.p2p: unknown setting '%s'%s";
 	public static final String BAD_PORT = "adapters.p2p.port must be 0 (any free port) to 65535, got: %s";
 	public static final String URL_NOT_STRING = "adapters.p2p.url must be a string";
 	public static final String URL_WITHOUT_PORT = "adapters.p2p.url advertises a listener; set adapters.p2p.port too";
@@ -145,6 +146,8 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 
 	private static final Set<AString> SETTINGS = Set.of(Config.ENABLED, K_JOIN, K_PEERS, K_POLL_MS,
 		NodeConfig.PORT, NodeConfig.URL, NodeConfig.ALLOW_PRIVATE_URL);
+	/** {@link #SETTINGS} in name order, for {@link NearestNames}. */
+	private static final List<String> SETTING_NAMES = SETTINGS.stream().map(AString::toString).sorted().toList();
 
 	/** A change in what the venue's node knows; {@code peer} is the entry as {@code p2p/peers} lists it. */
 	public record PeerEvent(String type, AMap<AString, ACell> peer) {
@@ -539,7 +542,9 @@ public class P2PAdapter extends AAdapter implements AutoCloseable {
 		if (strict) {
 			for (long i = 0; i < config.count(); i++) {
 				AString key = config.entryAt(i).getKey();
-				if (!SETTINGS.contains(key)) throw new ConfigurationException(UNKNOWN_SETTING.formatted(key));
+				if (!SETTINGS.contains(key)) {
+					throw new ConfigurationException(UNKNOWN_SETTING.formatted(key, NearestNames.hint(key.toString(), SETTING_NAMES)));
+				}
 			}
 		}
 		boolean join = bool(config, K_JOIN);

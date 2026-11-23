@@ -1,6 +1,7 @@
 package covia.adapter.discord;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -19,6 +20,7 @@ import covia.exception.ConfigurationException;
 import covia.exception.InvalidDefinitionException;
 import covia.exception.InvalidInputException;
 import covia.exception.UnsupportedException;
+import covia.utils.NearestNames;
 import covia.venue.RequestContext;
 
 /** Discord bots as a venue front door and as an outbound messaging adapter. */
@@ -34,11 +36,14 @@ public class DiscordAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	public static final AString ABILITY_SEND=Strings.intern("discord/send"),
 		ABILITY_CALL=Strings.intern("discord/call"), ABILITY_MANAGE=Strings.intern("discord/manage");
 	private static final Set<AString> KNOWN=Set.of(K_BOTS,K_API_URL,K_ENABLED);
+	/** {@link #KNOWN} in name order, for {@link NearestNames}. */
+	private static final List<String> KNOWN_NAMES=KNOWN.stream().map(AString::toString).sorted().toList();
 	private volatile String apiUrl=DEFAULT_API_URL;
 
 	/** Refusals of the {@code adapters.discord} settings. */
 	public static final String STATE_PATH_FIXED="adapters.discord.statePath is fixed at :adapters/discord";
-	public static final String UNKNOWN_SETTING="adapters.discord: unknown setting %s";
+	/** A setting not known here: its name, then {@link NearestNames#hint}. */
+	public static final String UNKNOWN_SETTING="adapters.discord: unknown setting %s%s";
 	public static final String API_URL_NOT_STRING="adapters.discord.apiUrl must be a non-empty string";
 	public static final String API_URL_NOT_HTTP="adapters.discord.apiUrl must be an http(s) URL";
 	public static final String BOTS_NOT_OBJECT="adapters.discord.bots must be an object";
@@ -62,7 +67,7 @@ public class DiscordAdapter extends AMessagingAdapter<BotSpec, BotRunner> {
 	@Override public void configure(AMap<AString,ACell> config,boolean strict){
 		if(config==null)config=Maps.empty();
 		if(config.containsKey(K_STATE_PATH))throw new ConfigurationException(STATE_PATH_FIXED);
-		if(strict)for(long i=0;i<config.count();i++){ACell k=config.entryAt(i).getKey();if(!(k instanceof AString s)||!KNOWN.contains(s))throw new ConfigurationException(UNKNOWN_SETTING.formatted(k));}
+		if(strict)for(long i=0;i<config.count();i++){ACell k=config.entryAt(i).getKey();if(!(k instanceof AString s)||!KNOWN.contains(s))throw new ConfigurationException(UNKNOWN_SETTING.formatted(k,NearestNames.hint(String.valueOf(k),KNOWN_NAMES)));}
 		String url=DEFAULT_API_URL; ACell u=config.get(K_API_URL);
 		if(u!=null){if(!(u instanceof AString s)||s.isEmpty())throw new ConfigurationException(API_URL_NOT_STRING);url=s.toString();if(!url.startsWith("http://")&&!url.startsWith("https://"))throw new ConfigurationException(API_URL_NOT_HTTP);url=url.replaceAll("/+$","");}
 		Map<String,BotSpec> parsed=new LinkedHashMap<>(); ACell bc=config.get(K_BOTS);

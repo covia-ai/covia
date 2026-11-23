@@ -29,6 +29,7 @@ import covia.api.Fields;
 import covia.exception.ConfigurationException;
 import covia.exception.InvalidInputException;
 import covia.exception.JobFailedException;
+import covia.utils.NearestNames;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
 import covia.venue.TestAgents;
@@ -363,13 +364,18 @@ public class PreferencesAdapterTest {
 	public void testConfigurationIsValidated() {
 		PreferencesAdapter adapter = new PreferencesAdapter();
 		adapter.configure(Maps.of("maxBytes", 8192L, "users", Maps.of("did:key:z6MkA", Maps.of("maxBytes", 100L))), true);
-		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("maxBites", 1L), true));
+		assertEquals(PreferencesAdapter.UNKNOWN_SETTING.formatted("adapters.preferences", "maxBites",
+				NearestNames.DID_YOU_MEAN.formatted("maxBytes")),
+			assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("maxBites", 1L), true)).getMessage(),
+			"a near miss names the setting meant");
 		assertDoesNotThrow(() -> adapter.configure(Maps.of("maxBites", 1L), false), "unknown settings pass when not strict");
 		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("maxBytes", 0L), false));
 		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("maxBytes", "big"), false));
 		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("users", Vectors.empty()), false));
 		assertThrows(ConfigurationException.class, () -> adapter.configure(Maps.of("users", Maps.of("bob", Maps.empty())), false));
-		assertThrows(ConfigurationException.class,
-			() -> adapter.configure(Maps.of("users", Maps.of("did:key:z6MkA", Maps.of("limit", 1L))), true));
+		assertEquals(PreferencesAdapter.UNKNOWN_SETTING.formatted("adapters.preferences.users.did:key:z6MkA", "limit", ""),
+			assertThrows(ConfigurationException.class,
+				() -> adapter.configure(Maps.of("users", Maps.of("did:key:z6MkA", Maps.of("limit", 1L))), true)).getMessage(),
+			"nothing is named when nothing is close");
 	}
 }

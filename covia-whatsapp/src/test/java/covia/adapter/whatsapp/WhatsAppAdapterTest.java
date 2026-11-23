@@ -61,7 +61,7 @@ class WhatsAppAdapterTest {
 			String status = f.run("bots", Maps.empty()).toString();
 			assertFalse(status.contains(TOKEN)); assertFalse(status.contains("s/SIGNING"));
 			assertTrue(status.contains("/webhooks/whatsapp/c-main"));
-			assertEquals(MessagingSettings.UNKNOWN.formatted("statePath"), assertThrows(ConfigurationException.class,
+			assertEquals(MessagingSettings.UNKNOWN.formatted("statePath", ""),assertThrows(ConfigurationException.class,
 				() -> f.engine.configureAdapter(NAME, Maps.of("statePath", "w/other"))).getMessage());
 			assertEquals(MessagingHttp.INVALID_URL, assertThrows(ConfigurationException.class,
 				() -> f.engine.configureAdapter(NAME, Maps.of("apiUrl", "https://token@example.com"))).getMessage());

@@ -43,6 +43,7 @@ import covia.grid.Asset;
 import covia.grid.Job;
 import covia.grid.Status;
 import covia.python.PythonRuntime;
+import covia.utils.NearestNames;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -92,9 +93,13 @@ class PythonAdapterTest {
 		assertThrows(ConfigurationException.class,
 			() -> adapter.configure(Maps.of("operations", Maps.of(
 				"valid", Maps.of("function", "main"))), false));
-		assertEquals(PythonAdapter.UNKNOWN_SETTING.formatted("python", "typo"),
+		assertEquals(PythonAdapter.UNKNOWN_SETTING.formatted("python", "typo", ""),
 			assertThrows(ConfigurationException.class,
 				() -> adapter.configure(Maps.of("typo", true), true)).getMessage());
+		assertEquals(PythonAdapter.UNKNOWN_SETTING.formatted("python", "operation", NearestNames.DID_YOU_MEAN.formatted("operations")),
+			assertThrows(ConfigurationException.class,
+				() -> adapter.configure(Maps.of("operation", Maps.empty()), true)).getMessage(),
+			"a near miss names the setting meant");
 		Path missing = temp.resolve("missing.py").toAbsolutePath().normalize();
 		assertEquals(PythonAdapter.SCRIPT_NOT_FOUND.formatted("operations.double.script", missing),
 			assertThrows(ConfigurationException.class,

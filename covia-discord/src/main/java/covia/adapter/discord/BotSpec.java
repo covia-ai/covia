@@ -2,6 +2,7 @@ package covia.adapter.discord;
 
 import java.util.Collections;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
@@ -19,6 +20,7 @@ import covia.venue.Engine;
 import covia.adapter.messaging.ChannelAuthentication;
 import covia.adapter.messaging.MessagingBotSpec;
 import covia.adapter.messaging.MessagingSettings;
+import covia.utils.NearestNames;
 
 /** Immutable and validated configuration for one Discord bot. */
 public record BotSpec(String name, String tokenRef, String userRef, String agent,
@@ -31,6 +33,10 @@ public record BotSpec(String name, String tokenRef, String userRef, String agent
 		K_GREETING=Strings.intern("greeting");
 	private static final Set<AString> KNOWN=Set.of(K_TOKEN,K_USER,K_AGENT,K_OPERATION,K_REPLY,
 		K_ALLOW,K_OPEN,K_MENTION_ONLY,K_GREETING);
+	/** {@link #KNOWN} in name order, for {@link NearestNames}. */
+	private static final List<String> KNOWN_NAMES=KNOWN.stream().map(AString::toString).sorted().toList();
+	/** A bot setting not known here: where, the setting, then {@link NearestNames#hint}. */
+	public static final String UNKNOWN_SETTING="%s: unknown setting %s%s";
 	static final String PUBLIC_USER="public";
 
 	public BotSpec {
@@ -66,7 +72,7 @@ public record BotSpec(String name, String tokenRef, String userRef, String agent
 		AMap<AString,ACell> m=RT.castMap(cell);
 		if(m==null) throw new IllegalArgumentException(where+" must be an object");
 		if(strict) for(long i=0;i<m.count();i++) { ACell k=m.entryAt(i).getKey(); if(!(k instanceof AString s)||!KNOWN.contains(s))
-			throw new IllegalArgumentException(where+": unknown setting "+k); }
+			throw new IllegalArgumentException(UNKNOWN_SETTING.formatted(where,k,NearestNames.hint(String.valueOf(k),KNOWN_NAMES))); }
 		String token=str(m,K_TOKEN,where), user=str(m,K_USER,where), agent=str(m,K_AGENT,where), op=str(m,K_OPERATION,where);
 		if(token==null||token.isBlank()) throw new IllegalArgumentException(where+".token is required (prefer s/NAME)");
 		if(user==null||user.isBlank()||(!PUBLIC_USER.equals(user)&&!CapabilityChecker.namesPrincipal(user)))

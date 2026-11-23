@@ -13,6 +13,7 @@ import convex.core.data.Maps;
 import convex.core.data.Strings;
 import convex.core.data.prim.CVMBool;
 import convex.core.lang.RT;
+import covia.utils.NearestNames;
 
 /**
  * A binding's relay settings are validated whole, and a relay is one of exactly one
@@ -36,8 +37,11 @@ class RelaySettingsTest {
 			() -> RelaySettings.parse(Maps.of("notices", Maps.of("mystery", "x")), true)).getMessage());
 		assertEquals(RelaySettings.INVALID, assertThrows(IllegalArgumentException.class,
 			() -> RelaySettings.parse(CVMBool.FALSE, true)).getMessage());
-		assertEquals(MessagingSettings.UNKNOWN.formatted("mystery"), assertThrows(IllegalArgumentException.class,
+		assertEquals(MessagingSettings.UNKNOWN.formatted("mystery", ""), assertThrows(IllegalArgumentException.class,
 			() -> RelaySettings.parse(Maps.of("mystery", 1), true)).getMessage());
+		assertEquals(MessagingSettings.UNKNOWN.formatted("maxPart", NearestNames.DID_YOU_MEAN.formatted("maxParts")),
+			assertThrows(IllegalArgumentException.class,
+				() -> RelaySettings.parse(Maps.of("maxPart", 2), true)).getMessage(), "a near miss names the setting meant");
 	}
 
 	@Test void aRelayIsTheOneHandler_ownedByADid() {

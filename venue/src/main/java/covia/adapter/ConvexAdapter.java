@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
@@ -46,6 +47,7 @@ import covia.exception.InvalidInputException;
 import covia.exception.NotFoundException;
 import covia.exception.UnavailableException;
 import covia.exception.UnsupportedException;
+import covia.utils.NearestNames;
 import covia.venue.Config;
 import covia.venue.Engine;
 import covia.venue.RequestContext;
@@ -78,6 +80,8 @@ public class ConvexAdapter extends AAdapter {
 	static final AString K_ANY_PEER = Strings.intern("anyPeer");
 	static final AString K_TIMEOUT_MILLIS = Strings.intern("timeoutMillis");
 	private static final Set<AString> SETTINGS = Set.of(Config.ENABLED, K_PEER, K_ANY_PEER, K_TIMEOUT_MILLIS);
+	/** {@link #SETTINGS} in name order, for {@link NearestNames}. */
+	private static final List<String> SETTING_NAMES = SETTINGS.stream().map(AString::toString).sorted().toList();
 
 	/** The peer a venue talks to when its operator names none. */
 	public static final String DEFAULT_PEER = "peer.convex.live:18888";
@@ -101,8 +105,8 @@ public class ConvexAdapter extends AAdapter {
 	/** Why a call ends when its thread is interrupted while it waits on its peer; the peer follows. */
 	public static final String INTERRUPTED = "Interrupted waiting for the Convex peer ";
 
-	/** Why a setting adapters.convex does not have is refused; the setting follows. */
-	public static final String UNKNOWN_SETTING = "adapters.convex: unknown setting ";
+	/** Why a setting adapters.convex does not have is refused: the setting, then {@link NearestNames#hint}. */
+	public static final String UNKNOWN_SETTING = "adapters.convex: unknown setting '%s'%s";
 
 	/** Why an anyPeer setting that is not a boolean is refused; the value follows. */
 	public static final String ANY_PEER_NOT_BOOLEAN = "adapters.convex.anyPeer must be a boolean, got: ";
@@ -145,7 +149,7 @@ public class ConvexAdapter extends AAdapter {
 			for (long i = 0; i < config.count(); i++) {
 				AString key = config.entryAt(i).getKey();
 				if (!SETTINGS.contains(key)) {
-					throw new ConfigurationException(UNKNOWN_SETTING + "'" + key + "'");
+					throw new ConfigurationException(UNKNOWN_SETTING.formatted(key, NearestNames.hint(key.toString(), SETTING_NAMES)));
 				}
 			}
 		}
