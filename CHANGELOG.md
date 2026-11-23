@@ -8,6 +8,10 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- `skill_load` reports only what a load newly makes discoverable: `revealed` no longer repeats skills an earlier load revealed, and `skillIndex` holds just their index lines instead of every discoverable skill, and is left out when nothing is new.
+
 ## [0.12.0] - 2026-11-20
 
 ### Added
