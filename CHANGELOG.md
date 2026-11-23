@@ -13,7 +13,6 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - Plain Kubernetes manifests and a guide for running a venue on a cluster (`deploy/kubernetes`).
 - `seed` can be read from an environment variable or a file (`{"env": …}`, `{"file": …}`), as `etch.key` can, so a venue's identity can come from a Kubernetes Secret or any other secret source.
 - `hitl:list` items carry `from`: who asked and how the request reached the inbox, worded for the reader.
-- Claude models through OpenRouter (`anthropic/…` ids) are prompt-cached with OpenRouter's automatic caching, honouring `cache` and `modelOptions.cacheTtl` (#648).
 
 ### Changed
 
@@ -22,6 +21,12 @@ Covia is pre-1.0, so minor versions may include breaking changes.
 - The owner's messages carry the `[From …]` hint only when where they come from changes, so a conversation over one HTTP login or access token is labelled once; every other source is still labelled on every message.
 - Refusals of an unknown setting or input field in the Convex, P2P, preferences, Python, Discord, Slack and WhatsApp adapters name the one most likely meant, when one is close.
 - An agent calling a tool name it cannot call gets one hint: the skill to load when an advertised skill binds that name, otherwise the callable tool it most likely misspelt, typing slips now included as well as case and separators.
+
+## [0.12.1] - 2026-11-23
+
+### Added
+
+- Claude models through OpenRouter (`anthropic/…` ids) are prompt-cached with OpenRouter's automatic caching, honouring `cache` and `modelOptions.cacheTtl` (#648).
 
 ### Fixed
 
@@ -1143,7 +1148,8 @@ Initial public release: venue server with the adapter framework, lattice-backed
 content-addressed assets, the async job model with SSE, multi-protocol surface
 (REST / MCP / A2A / DID), and strategy-based authentication.
 
-[Unreleased]: https://github.com/covia-ai/covia/compare/0.12.0...HEAD
+[Unreleased]: https://github.com/covia-ai/covia/compare/0.12.1...HEAD
+[0.12.1]: https://github.com/covia-ai/covia/compare/0.12.0...0.12.1
 [0.12.0]: https://github.com/covia-ai/covia/compare/0.11.0...0.12.0
 [0.11.0]: https://github.com/covia-ai/covia/compare/0.10.0...0.11.0
 [0.10.0]: https://github.com/covia-ai/covia/compare/0.9.11...0.10.0
