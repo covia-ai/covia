@@ -53,6 +53,14 @@
 				"providerOptions": {
 					"type": "object",
 					"description": "Provider-native request body fields forwarded unchanged; omitted fields retain provider defaults. Do not repeat the shared model/messages/tools/temperature/top_p envelope here."
+				},
+				"cache": {
+					"type": "boolean",
+					"description": "Prompt caching for Claude models (anthropic/… ids), default true: the request asks OpenRouter for automatic caching. Set false to disable caching for this call."
+				},
+				"modelOptions": {
+					"type": "object",
+					"description": "Per-call overrides of model.options in the effective model definition. Agents forward config.modelOptions. cacheTtl (5m or 1h, default 5m) sets the cache lifetime for Claude models."
 				}
 			}
 		},
