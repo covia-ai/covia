@@ -190,7 +190,8 @@ accept successful push runs and reject superseded candidates.
 Publishers reuse the Test run's jars; the snapshot tag names the tested SHA.
 Each Docker publishing attempt saves `deployment-<attempt>` for 90 days, recording
 the source `sha`, `branch`, image digest reference and `test_run_id`. Deploys use
-that digest; EC2/Azure also use the host script from the recorded SHA.
+that digest; EC2/Azure also use the host script from the recorded SHA, and GCP
+uses the one on `develop`, where its workflow runs.
 
 For a manual deploy, run the host's Actions workflow from `develop` with
 `publish_run_id` set to a successful *Publish Docker image* run: QA for EC2/Azure,
