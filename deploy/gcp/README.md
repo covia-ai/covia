@@ -1,7 +1,7 @@
-# GCP Deployment (Stable Venues)
+# GCP Deployment (Dev and Stable Venues)
 
-Docker-based deployment for the stable venues `venue-test.covia.ai`,
-`venue-1.covia.ai` and `venue-2.covia.ai`, in GCP project
+Docker-based deployment for the dev venue `venue-test.covia.ai` and the
+stable venues `venue-1.covia.ai` and `venue-2.covia.ai`, in GCP project
 `idyllic-pottery-468305-u2`, zone `asia-southeast1-b`.
 
 Since 2026-11-24 the venues run on two hosts, each venue in its own container
@@ -22,10 +22,16 @@ registration (`users.autoCreate: true`). Any caller that proves control of a
 valid DID is admitted on its first operation. `venue-1` and `venue-2` retain
 the default closed admission policy and require explicit provisioning.
 
-The containers run the image digest recorded by `publish-docker.yml` after
-successful master validation (also tagged `:stable`), and are redeployed
-automatically by `deploy-gcp.yml`. The QA venues (`venue-3`, `venue-4`) track
-`qa` via the `:latest` image; these hosts only change at releases.
+Each host follows one branch. `deploy-gcp.yml` deploys the image digest
+recorded by `publish-docker.yml` for that branch's successful Test run:
+
+| Branch | Image tag | Host | Changes |
+|--------|-----------|------|---------|
+| `develop` | `:dev` | `covia-venue-test` | on every develop push that passes the default tests |
+| `master` | `:stable` | `covia-stable` | at releases |
+
+The QA venues (`venue-3`, `venue-4`) track `qa` via the `:latest` image on
+AWS and Azure (see `BUILD.md` → Development and QA).
 
 ## Host Layout
 
@@ -97,7 +103,7 @@ come back with the same DID it had before the restart.
 
 The condition names `develop` because `workflow_run` always runs the workflow
 from the default branch; the image deployed is still the one published from
-`master`. None of these values is secret, so they are written in the workflow.
+the run's own branch. None of these values is secret, so they are written in the workflow.
 
 OS Login is on and project `ssh-keys` metadata is blocked on both hosts.
 Admins log in with an account that has `roles/compute.osAdminLogin` and
@@ -114,8 +120,10 @@ that holds the roles above (`--impersonate-service-account`).
 
 ## Manual Deploy
 
-Run *Deploy to GCP* with a master publishing run ID, following
-[the redeploy procedure](../../BUILD.md#deployment-identity-and-redeploys).
+Run *Deploy to GCP* from `develop` with a *Publish Docker image* run ID,
+following [the redeploy procedure](../../BUILD.md#deployment-identity-and-redeploys).
+The run's branch picks the host: a develop run deploys venue-test, a master
+run deploys venue-1 and venue-2; any other run is refused.
 
 For an ad hoc deploy on a host, run `deploy.sh` there with the image digest
 and that host's venues:
@@ -125,11 +133,22 @@ sudo DEPLOY_IMAGE=ghcr.io/covia-ai/covia@sha256:<digest> bash deploy/gcp/deploy.
 sudo DEPLOY_IMAGE=ghcr.io/covia-ai/covia@sha256:<digest> bash deploy/gcp/deploy.sh venue-test        # covia-venue-test
 ```
 
+## Store backups
+
+`deploy.sh` copies each venue's stopped `data/` directory (store and
+`venue.key`) to `/srv/covia/backups/<venue>/<UTC time>/` before the new image
+starts, keeping the newest three. The copies are root-only and outside every
+container's mount. They matter most on venue-test: a develop build may migrate
+the store format, and an older build can't open a migrated store.
+
 ## Rollback
 
 Every published build is also tagged with its short commit SHA. To roll
 back, deploy that build's digest (`docker buildx imagetools inspect
-ghcr.io/covia-ai/covia:<sha>`) with `deploy.sh` as above.
+ghcr.io/covia-ai/covia:<sha>`) with `deploy.sh` as above. If the newer build
+migrated the store, first stop the container and restore the backup taken
+just before that deploy into `/srv/covia/<venue>/data` (owned by uid 1001);
+writes made since are lost.
 
 ## Notes
 

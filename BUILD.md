@@ -158,24 +158,29 @@ contents, provenance, candidate-jar checks and generation instructions.
 
 ### Development and QA
 
-| Branch/event | Validation | Publication and deployment |
-|--------------|------------|----------------------------|
-| `develop` pushes and PRs | Default tests, Java 21 fallback | None; direct pushes allowed |
-| `qa` pushes | Default, integration and durability tests, Java 21 fallback | `latest-snapshot`, Docker `:latest`, QA venues 3 and 4 |
-| PRs into `master` | Same as QA | None |
-| `master` pushes | Same as QA | Docker `:stable` (plus version tags for non-SNAPSHOT builds), stable venues test/1/2 |
-| Release tags | Default, integration and durability tests | Versioned GitHub release and `latest` |
+Every change passes three venue tiers in turn:
+
+| Branch/event | How code arrives | Validation | Publication and deployment |
+|--------------|------------------|------------|----------------------------|
+| `develop` pushes | Direct pushes or PRs | Default tests, Java 21 fallback | Docker `:dev`, dev venue venue-test |
+| PRs into `develop` | | Default tests, Java 21 fallback | None |
+| PRs into `qa` | PR from `develop` | Default, integration and durability tests, Java 21 fallback | None |
+| `qa` pushes | Merge of a PR from `develop` | Same as QA PRs | `latest-snapshot`, Docker `:latest`, QA venues 3 and 4 |
+| PRs into `master` | PR from `qa` (release branch, below) | Same as QA PRs | None |
+| `master` pushes | Merge of a release PR | Same as QA PRs | Docker `:stable` (plus version tags for non-SNAPSHOT builds), stable venues 1 and 2 |
+| Release tags | | Default, integration and durability tests | Versioned GitHub release and `latest` |
 
 QA holds selected development commits for testing, prereleases and release
-candidates. Fixes go through develop; QA has no independent commits. Promote
-without force, publishing develop first:
+candidates. Fixes go through develop; QA has no commits of its own. Promote
+develop to QA with a pull request, merged as a **merge commit**:
 
 ```bash
 git push origin develop
-git push origin develop:qa
+gh pr create --base qa --head develop --title "Promote develop to QA"
 ```
 
-QA checks that its commit belongs to published develop. Accept a candidate after
+QA checks that it is a develop commit, or a merge of one that adds nothing
+beyond it; a squash or rebase merge fails that check. Accept a candidate after
 tests, both QA-venue deploys and relevant manual/API checks pass. Review skipped
 external-service tests and record the accepted SHA and publishing run. The release
 operator verifies acceptance; it is not an automated master merge prerequisite.
@@ -194,8 +199,9 @@ that digest; EC2/Azure also use the host script from the recorded SHA, and GCP
 uses the one on `develop`, where its workflow runs.
 
 For a manual deploy, run the host's Actions workflow from `develop` with
-`publish_run_id` set to a successful *Publish Docker image* run: QA for EC2/Azure,
-master for GCP. Its latest attempt must have succeeded and its record must still
+`publish_run_id` set to a successful *Publish Docker image* run: QA for EC2/Azure;
+for GCP, a develop run deploys venue-test and a master run deploys venue-1 and
+venue-2. Its latest attempt must have succeeded and its record must still
 exist. An earlier run selects an older image; restoring incompatible stores also
 requires their matching backup and keys (see [deployment guide](deploy/README.md)).
 
@@ -204,8 +210,10 @@ requires their matching backup and keys (see [deployment guide](deploy/README.md
 Configure GitHub separately from the workflows:
 
 - Keep develop open to direct iteration.
-- Disallow QA force pushes and deletion; allow fast-forward promotion.
-- Require `build-and-test` and `java21-fallback` for master release merges.
+- QA: require a pull request with `build-and-test` and `java21-fallback`;
+  allow merge commits only; disallow force pushes and deletion.
+- Master: require a pull request with `build-and-test` and `java21-fallback`;
+  disallow force pushes and deletion.
 
 Remaining rollout from the 2026-11-12 audit:
 
@@ -213,6 +221,8 @@ Remaining rollout from the 2026-11-12 audit:
   unprotected; master required only `build-and-test`, with admin bypass.
 - [ ] Publish the workflow changes to develop and verify a full QA promotion:
   Test → snapshot/Docker publication → both QA-venue deployments.
+- [ ] Verify the dev tier: a develop push → Docker `:dev` → venue-test only.
+- [ ] Apply the QA pull-request rule (merge commits only).
 
 ### Stable Releases
 

@@ -1,11 +1,15 @@
 name: Deploy to GCP
 
-# Deploys the published stable image to the GCP hosts running the stable
-# venues (security#6): covia-stable runs venue-1 and venue-2, and
-# covia-venue-test runs venue-test, each venue in its own container. The image
-# itself is built and pushed by publish-docker.yml on pushes to master; this
-# workflow only pulls and (re)starts the containers, after a successful
-# publish or on manual dispatch.
+# Deploys a published image to the GCP venue hosts, choosing the host by the
+# branch the image was published from (BUILD.md → Development and QA):
+#
+#   develop → covia-venue-test (venue-test, the dev venue)
+#   master  → covia-stable     (venue-1, venue-2, the stable venues)
+#
+# Each venue runs in its own container (security#6). The image itself is built
+# and pushed by publish-docker.yml; this workflow only pulls and (re)starts the
+# containers, after a successful publish or on manual dispatch. qa images go to
+# venue-3 and venue-4 through deploy-ec2.yml and deploy-azure.yml instead.
 #
 # Host layout and one-time setup are documented in deploy/gcp/README.md.
 #
@@ -16,7 +20,7 @@ name: Deploy to GCP
 # Login.
 #
 # workflow_run always runs this file from the default branch (develop), so
-# the OIDC token says refs/heads/develop even when the image came from master,
+# the OIDC token says refs/heads/develop whichever branch the image came from,
 # and deploy.sh is taken from the same develop checkout.
 
 on:
@@ -26,53 +30,79 @@ on:
   workflow_dispatch:
     inputs:
       publish_run_id:
-        description: Successful master Publish Docker image run ID to deploy
+        description: Successful develop (venue-test) or master (venue-1, venue-2) Publish Docker image run ID to deploy
         required: true
         type: string
 
-# Never cancel a mid-flight deploy; queue the newest instead
-concurrency:
-  group: deploy-gcp
-  cancel-in-progress: false
-
 jobs:
-  deploy:
-    name: Deploy ${{ matrix.vm }}
+  plan:
+    name: Choose host
     runs-on: ubuntu-latest
     if: >-
       ${{
         github.event_name == 'workflow_dispatch' ||
         (
           github.event.workflow_run.conclusion == 'success' &&
-          endsWith(github.event.workflow_run.display_title, '[master]')
+          (
+            endsWith(github.event.workflow_run.display_title, '[develop]') ||
+            endsWith(github.event.workflow_run.display_title, '[master]')
+          )
         )
       }}
+    permissions:
+      actions: read
+    outputs:
+      matrix: ${{ steps.host.outputs.matrix }}
+    steps:
+    - name: Map the publishing branch to its host
+      id: host
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RUN_ID: ${{ inputs.publish_run_id || github.event.workflow_run.id }}
+      run: |
+        [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+        # The publishing run's title carries the branch its image came from
+        # ("Publish Docker image [develop]"); the deployment action checks the
+        # same branch against the run's recorded identity.
+        title=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq .display_title)
+        case "$title" in
+          *"[develop]") matrix='[{"vm":"covia-venue-test","venues":"venue-test","branch":"develop"}]' ;;
+          *"[master]")  matrix='[{"vm":"covia-stable","venues":"venue-1 venue-2","branch":"master"}]' ;;
+          *) echo "::error::run $RUN_ID ($title) is not a develop or master publication"; exit 1 ;;
+        esac
+        echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+        echo "Run $RUN_ID: $title → $(jq -r '.[0].vm' <<<"$matrix")" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Deploy ${{ matrix.vm }}
+    needs: plan
+    runs-on: ubuntu-latest
+    # One deploy per host at a time; never cancel a mid-flight deploy, queue
+    # the newest instead. Hosts are separate queues, so a develop deploy never
+    # replaces a queued master one.
+    concurrency:
+      group: deploy-gcp-${{ matrix.vm }}
+      cancel-in-progress: false
     permissions:
       contents: read
       actions: read
       id-token: write   # OIDC token for the deploy service account; no stored secret
     strategy:
-      # One host at a time, and a failure on one host doesn't stop the other
-      max-parallel: 1
       fail-fast: false
       matrix:
-        include:
-          - vm: covia-stable
-            venues: venue-1 venue-2
-          - vm: covia-venue-test
-            venues: venue-test
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       VM_ZONE: asia-southeast1-b
 
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-    - name: Resolve the published stable image
+    - name: Resolve the published image
       id: deployment
       uses: ./.github/actions/deployment
       with:
         run-id: ${{ inputs.publish_run_id || github.event.workflow_run.id }}
-        branch: master
+        branch: ${{ matrix.branch }}
 
     - name: Sign in as the GCP deploy service account (OIDC)
       uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
