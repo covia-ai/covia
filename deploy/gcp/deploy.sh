@@ -118,6 +118,27 @@ PY
   before=$(status_did "$port")
 
   docker stop "$container" 2>/dev/null || true
+
+  # Copy the stopped store and its key before the new image opens it: a newer
+  # build may migrate the store format (venue-test runs every develop build),
+  # and an older build can't read a migrated store. Kept root-only, outside the
+  # venue's mount; the newest three copies are kept. A container that is still
+  # running or a failed copy stops the deploy before the new image starts.
+  if [ -f "$dir/data/venue.etch" ]; then
+    if [ -n "$(docker ps -q --filter "name=^/$container\$")" ]; then
+      echo "::error::$container is still running; refusing an inconsistent backup"
+      exit 1
+    fi
+    backups=/srv/covia/backups/$v
+    install -d -m 0700 /srv/covia/backups "$backups"
+    stamp=$(date -u +%Y%m%dT%H%M%SZ)
+    if ! cp -a "$dir/data" "$backups/.$stamp" || ! mv -T "$backups/.$stamp" "$backups/$stamp"; then
+      echo "::error::backup of $v failed; new image not started"
+      exit 1
+    fi
+    ls -1d "$backups"/2* | head -n -3 | xargs -r rm -rf
+    echo "$v store backed up to $backups/$stamp"
+  fi
   docker rm "$container" 2>/dev/null || true
 
   # Publish on loopback only: Caddy terminates TLS on this host. A bare

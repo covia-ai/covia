@@ -2,16 +2,17 @@
 
 Live venue server instances available for development, testing, and agent use.
 
-Two tiers:
+Three tiers, one per branch; every change passes them in turn (see `BUILD.md` → Development and QA):
 
-- **Stable** — `venue-1`, `venue-2` (plus `venue-test` for scratch use): run the `:stable` image, deployed automatically on push to `master` (i.e. at releases). Use these for demos, integrations, and anything long-lived.
-- **QA** — `venue-3`, `venue-4`: run the `:latest` image, deployed automatically on every push to `qa`, which follows `develop`. Use these to exercise unreleased features.
+- **Dev** — `venue-test`: runs the `:dev` image, deployed automatically on every push to `develop`. Scratch venue for trying the newest code; expect breakage and resets.
+- **QA** — `venue-3`, `venue-4`: run the `:latest` image, deployed automatically on every push to `qa`, which takes develop by pull request. Use these to exercise unreleased features.
+- **Stable** — `venue-1`, `venue-2`: run the `:stable` image, deployed automatically on push to `master` (i.e. at releases). Use these for demos, integrations, and anything long-lived.
 
 | Venue | Tier | Fresh authenticated DID |
 |---|---|---|
 | `venue-1.covia.ai` | Stable | Requires operator provisioning with `user:create` |
 | `venue-2.covia.ai` | Stable | Requires operator provisioning with `user:create` |
-| `venue-test.covia.ai` | Stable scratch | Registered on first authenticated use |
+| `venue-test.covia.ai` | Dev | Registered on first authenticated use |
 | `venue-3.covia.ai` | QA | Operator-configured; do not assume first-use registration |
 | `venue-4.covia.ai` | QA | Registered on first authenticated use |
 
@@ -22,7 +23,7 @@ policy may change with its operator configuration.
 
 ## Stable Venues
 
-The stable-tier venues run on two GCP hosts, each venue in its own container with its own store and DID: venue-1 and venue-2 on `covia-stable`, venue-test on its own host `covia-venue-test` (see `deploy/gcp/README.md`). Bootstrapped June 2026 from the latest snapshot build; from the next release onward they track the `:stable` image published from `master`.
+venue-1 and venue-2 run on the GCP host `covia-stable` (`35.213.147.8`), each in its own container with its own store and DID (see `deploy/gcp/README.md`). They track the `:stable` image published from `master`, so they change only at releases. Together they give a stable federation pair for cross-venue work.
 
 ### venue-1.covia.ai (GCP)
 
@@ -42,14 +43,16 @@ The stable-tier venues run on two GCP hosts, each venue in its own container wit
 - **DID:** https://venue-2.covia.ai/.well-known/did.json
 - **TLS:** Let's Encrypt (auto-renew)
 
+## Dev Venue
+
 ### venue-test.covia.ai (GCP)
 
 - **URL:** https://venue-test.covia.ai
 - **Status:** https://venue-test.covia.ai/api/v1/status
 - **MCP:** https://venue-test.covia.ai/mcp
-- **Purpose:** scratch venue for experiments — same build as venue-1/-2, but make no assumptions about data longevity
-
-The trio gives a stable federation set for cross-venue work (venue-1 and venue-2 at `35.213.147.8`, venue-test at `34.126.87.243`).
+- **Host:** `covia-venue-test` (`34.126.87.243`), on its own, isolated from the stable venues
+- **Build:** the `:dev` image, redeployed on every push to `develop` that passes the default tests
+- **Purpose:** scratch venue for trying the newest code — expect breakage, and make no assumptions about data longevity
 
 ## QA Venues
 
