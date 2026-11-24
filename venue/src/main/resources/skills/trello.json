@@ -1,0 +1,29 @@
+{
+	"name": "trello",
+	"description": "Work with Trello boards, lists, and cards using the user's own API key and token. Load for board/list/card reads and creating cards.",
+	"content": {
+		"contentType": "text/markdown",
+		"inline": "## Trello\nA multi-value connection: Trello carries **both** credentials in the query string. Calls go through `v/ops/http/get` / `v/ops/http/post` against `https://api.trello.com/1`, appending `key={s/TRELLO_KEY}&token={s/TRELLO_TOKEN}` to every request URL. The venue resolves both placeholders and masks them out of every job record; you never write the literal values.\n\nCommon calls (append `?key={s/TRELLO_KEY}&token={s/TRELLO_TOKEN}`, or `&` if the path already has a query):\n- Whoami: `GET /members/me?key={s/TRELLO_KEY}&token={s/TRELLO_TOKEN}`\n- Your boards: `GET /members/me/boards?fields=name,url&key={s/TRELLO_KEY}&token={s/TRELLO_TOKEN}`\n- Lists on a board: `GET /boards/{boardId}/lists?key={s/TRELLO_KEY}&token={s/TRELLO_TOKEN}`\n- Cards in a list: `GET /lists/{listId}/cards?key={s/TRELLO_KEY}&token={s/TRELLO_TOKEN}`\n- Create a card: `POST /cards?idList={listId}&name=<encoded>&key={s/TRELLO_KEY}&token={s/TRELLO_TOKEN}`\n- Comment: `POST /cards/{cardId}/actions/comments?text=<encoded>&key={s/TRELLO_KEY}&token={s/TRELLO_TOKEN}`\n\nRules:\n- Check `status`; a bad key or token returns `401` with the plain text `invalid token` / `invalid key`.\n- URL-encode free text (`name`, `text`) with `v/ops/jvm/url-encode`.\n- Both the key and the token must be configured.\n"
+	},
+	"connection": {
+		"baseUrl": "https://api.trello.com/1",
+		"auth": {
+			"kind": "url-secret",
+			"alternatives": [
+				"s/TRELLO_KEY"
+			]
+		},
+		"required": [
+			"s/TRELLO_KEY",
+			"s/TRELLO_TOKEN"
+		]
+	},
+	"skill": {
+		"tools": [
+			"v/ops/connections/status",
+			"v/ops/http/get",
+			"v/ops/http/post",
+			"v/ops/jvm/url-encode"
+		]
+	}
+}
