@@ -22,7 +22,7 @@ policy may change with its operator configuration.
 
 ## Stable Venues
 
-All three stable-tier venues run in a **single JVM** on one GCP host (multi-venue `venues` array config — see `deploy/gcp/README.md`), each with its own store and DID. Bootstrapped June 2026 from the latest snapshot build; from the next release onward they track the `:stable` image published from `master`.
+The stable-tier venues run on two GCP hosts, each venue in its own container with its own store and DID: venue-1 and venue-2 on `covia-stable`, venue-test on its own host `covia-venue-test` (see `deploy/gcp/README.md`). Bootstrapped June 2026 from the latest snapshot build; from the next release onward they track the `:stable` image published from `master`.
 
 ### venue-1.covia.ai (GCP)
 
@@ -49,7 +49,7 @@ All three stable-tier venues run in a **single JVM** on one GCP host (multi-venu
 - **MCP:** https://venue-test.covia.ai/mcp
 - **Purpose:** scratch venue for experiments — same build as venue-1/-2, but make no assumptions about data longevity
 
-The trio gives a stable federation set for cross-venue work on one host (`35.213.147.8`).
+The trio gives a stable federation set for cross-venue work (venue-1 and venue-2 at `35.213.147.8`, venue-test at `34.126.87.243`).
 
 ## QA Venues
 
